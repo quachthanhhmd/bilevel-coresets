@@ -13,7 +13,7 @@ from cl_streaming import datagen
 from cl_streaming import training
 from cl_streaming import ntk_generator
 
-datasets = ['permmnist', 'splitmnist']
+datasets = ['permmnist', 'splitmnist', 'splitfashionmnist']
 methods = ['uniform', 'coreset',
            'kmeans_features', 'kcenter_features', 'kmeans_grads',
            'kmeans_embedding', 'kcenter_embedding', 'kcenter_grads',
@@ -41,6 +41,8 @@ def continual_learning(args):
         generator = datagen.PermutedMnistGenerator(samples_per_task)
     elif dataset == 'splitmnist':
         generator = datagen.SplitMnistGenerator(samples_per_task)
+    elif dataset == 'splitfashionmnist':
+        generator = datagen.SplitFashionMnistGenerator(samples_per_task)
 
     tasks = []
     train_loaders = []

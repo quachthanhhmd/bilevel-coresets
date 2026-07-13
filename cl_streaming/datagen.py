@@ -101,6 +101,68 @@ class PermutedMnistGenerator(DataGenerator):
             return next_x_train, next_y_train, next_x_test, next_y_test
 
 
+class SplitFashionMnistGenerator(DataGenerator):
+    def __init__(self, limit_per_task=1000):
+        super().__init__(limit_per_task)
+
+        train_dataset = datasets.FashionMNIST('data/FashionMNIST', train=True, transform=mnist_transforms(),
+                                       download=True)
+        test_dataset = datasets.FashionMNIST('data/FashionMNIST/', train=False, transform=mnist_transforms(),
+                                      download=True)
+
+        train_loader = DataLoader(train_dataset, batch_size=len(train_dataset))
+        test_loader = DataLoader(test_dataset, batch_size=len(test_dataset))
+
+        self.X_train, self.Y_train = next(iter(train_loader))
+        self.X_train, self.Y_train = self.X_train.numpy(), self.Y_train.numpy()
+
+        self.X_test, self.Y_test = next(iter(test_loader))
+        self.X_test, self.Y_test = self.X_test.numpy(), self.Y_test.numpy()
+
+        self.sets_0 = [0, 2, 4, 6, 8]
+        self.sets_1 = [1, 3, 5, 7, 9]
+        self.max_iter = len(self.sets_0)
+
+        self.X_train_batch = []
+        self.y_train_batch = []
+        self.inds = []
+
+        rs = np.random.RandomState(0)
+
+        for i in range(5):
+            ind = np.where(np.logical_or(self.Y_train == self.sets_0[i], self.Y_train == self.sets_1[i]))[0]
+            ind = rs.choice(ind, limit_per_task, replace=False)
+            self.inds.append(ind)
+            X = self.X_train[ind]
+            y = self.Y_train[ind]
+            X, y = shuffle(X, y, random_state=0)
+            self.X_train_batch.append(X)
+            self.y_train_batch.append(y)
+        self.X_train_batch = np.vstack(self.X_train_batch)
+        self.y_train_batch = np.hstack(self.y_train_batch)
+
+        self.current_pos = 0
+
+    def next_task(self):
+        if self.cur_iter >= self.max_iter:
+            raise Exception('Number of tasks exceeded!')
+        else:
+            ind = self.inds[self.cur_iter]
+            next_x_train = self.X_train[ind]
+
+            next_y_train = self.Y_train[ind]
+
+            ind = np.where(
+                np.logical_or(self.Y_test == self.sets_0[self.cur_iter], self.Y_test == self.sets_1[self.cur_iter]))[
+                0]
+            next_x_test = self.X_test[ind]
+            next_y_test = self.Y_test[ind]
+
+            self.cur_iter += 1
+
+            return next_x_train, next_y_train, next_x_test, next_y_test
+
+
 class SplitMnistGenerator(DataGenerator):
     def __init__(self, limit_per_task=1000):
         super().__init__(limit_per_task)
