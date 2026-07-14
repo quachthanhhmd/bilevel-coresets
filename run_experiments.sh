@@ -41,6 +41,7 @@ done
 
 # Chuyển vào thư mục chứa code
 cd cl_streaming || exit
+export PYTHONPATH="$(pwd)/..:$PYTHONPATH"
 
 echo "================================================================"
 echo "CẤU HÌNH THỰC NGHIỆM:"

@@ -3,7 +3,7 @@ import torchvision.transforms as transforms
 import torchvision.datasets
 import torch
 from neural_tangents import stax
-from jax.api import jit
+from jax import jit
 
 
 def WideResnetBlock(channels, strides=(1, 1), channel_mismatch=False):

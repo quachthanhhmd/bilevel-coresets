@@ -1,5 +1,5 @@
 import numpy as np
-from jax.api import jit
+from jax import jit
 from neural_tangents import stax
 
 init_fn, apply_fn, kernel_fn = stax.serial(
