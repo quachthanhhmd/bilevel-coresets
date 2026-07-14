@@ -13,10 +13,13 @@ def get_best_betas(methods, datasets, betas, seeds, buffer_size, save_best=False
             for beta in betas:
                 res = []
                 for seed in seeds:
-                    with open('{}/{}_{}_{}_{}_{}.txt'.format(path, dataset, method, buffer_size, beta, seed),
-                              'r') as f:
-                        data = json.load(f)
-                        res.append(data['test_acc'])
+                    file_path = '{}/{}_{}_{}_{}_{}.txt'.format(path, dataset, method, buffer_size, beta, seed)
+                    try:
+                        with open(file_path, 'r') as f:
+                            data = json.load(f)
+                            res.append(data['test_acc'])
+                    except FileNotFoundError:
+                        continue
                 if len(res) > 0 and np.mean(res) > best_acc:
                     best_acc = np.mean(res)
                     best_beta = beta
@@ -32,10 +35,13 @@ def get_best_betas(methods, datasets, betas, seeds, buffer_size, save_best=False
 def get_result(method, dataset, beta, seeds, buffer_size, path='cl_results'):
     res = []
     for seed in seeds:
-        with open('{}/{}_{}_{}_{}_{}.txt'.format(path, dataset, method, buffer_size, beta, seed),
-                  'r') as f:
-            data = json.load(f)
-            res.append(data)
+        file_path = '{}/{}_{}_{}_{}_{}.txt'.format(path, dataset, method, buffer_size, beta, seed)
+        try:
+            with open(file_path, 'r') as f:
+                data = json.load(f)
+                res.append(data)
+        except FileNotFoundError:
+            continue
     return res
 
 

@@ -2,6 +2,7 @@ import numpy as np
 import torchvision.transforms as transforms
 import torchvision.datasets
 import torch
+import jax_patch
 from neural_tangents import stax
 from jax import jit
 

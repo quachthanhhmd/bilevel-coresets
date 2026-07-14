@@ -2,6 +2,7 @@ import argparse
 import torch
 import numpy as np
 import random as rnd
+import jax_patch
 import os
 import json
 from torch.utils.data import DataLoader
