@@ -39,6 +39,10 @@ while [[ "$#" -gt 0 ]]; do
     shift
 done
 
+METHODS_CSV=$(IFS=,; echo "${METHODS[*]}")
+SEEDS_CSV=$(IFS=,; echo "${SEEDS[*]}")
+BETAS_CSV=$(IFS=,; echo "${BETAS[*]}")
+
 # Chuyển vào thư mục chứa code
 cd cl_streaming || exit
 export PYTHONPATH="$(pwd)/..:$PYTHONPATH"
@@ -88,5 +92,5 @@ done
 # 4. TỔNG HỢP VÀ IN KẾT QUẢ
 # ------------------------------------------------------------------------------
 echo "=== KẾT THÚC THỰC NGHIỆM. TỔNG HỢP KẾT QUẢ ==="
-python process_results.py --exp cl
+python process_results.py --exp cl --datasets "$DATASET" --methods "$METHODS_CSV" --seeds "$SEEDS_CSV" --betas "$BETAS_CSV" --buffer_size 100
 echo "Ghi chú: Kết quả chi tiết từng file được lưu trong thư mục cl_streaming/cl_results/"
