@@ -5,6 +5,7 @@ import random as rnd
 import jax_patch
 import os
 import json
+import time
 from torch.utils.data import DataLoader
 import loss_utils
 import models
@@ -74,6 +75,12 @@ def continual_learning(args):
                                         inner_loss_fn=loss_utils.cross_entropy, out_dim=10, max_outer_it=1,
                                         max_inner_it=200, logging_period=1000)
     rs = np.random.RandomState(args.seed)
+    
+    # Ma trận lưu độ chính xác: acc_matrix[i][j] là độ chính xác trên task j sau khi học xong task i
+    acc_matrix = np.zeros((generator.max_iter, generator.max_iter))
+    
+    start_time = time.time()
+
     for i in range(generator.max_iter):
         training_op.train(train_loaders[i])
         size_per_task = buffer_size // (i + 1)
@@ -91,6 +98,12 @@ def continual_learning(args):
         X, y = X[chosen_inds], y[chosen_inds]
         assert (X.shape[0] == size_per_task)
         training_op.buffer.append(((X, y), np.ones(len(y))))
+        
+        # Đánh giá sau mỗi task để vẽ ma trận Forgetting
+        for k in range(i + 1):
+            acc_matrix[i][k] = training_op.test(test_loaders[k])
+
+    execution_time = time.time() - start_time
 
     result = []
     for k in range(generator.max_iter):
@@ -99,7 +112,12 @@ def continual_learning(args):
     if not os.path.exists('cl_results'):
         os.makedirs('cl_results')
     with open('cl_results/' + filename, 'w') as outfile:
-        json.dump({'test_acc': np.mean(result), 'acc_per_task': result}, outfile)
+        json.dump({
+            'test_acc': np.mean(result), 
+            'acc_per_task': result,
+            'acc_matrix': acc_matrix.tolist(),
+            'execution_time': execution_time
+        }, outfile)
 
 
 if __name__ == '__main__':

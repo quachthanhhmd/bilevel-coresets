@@ -94,3 +94,12 @@ done
 echo "=== KẾT THÚC THỰC NGHIỆM. TỔNG HỢP KẾT QUẢ ==="
 python process_results.py --exp cl --datasets "$DATASET" --methods "$METHODS_CSV" --seeds "$SEEDS_CSV" --betas "$BETAS_CSV" --buffer_size 100
 echo "Ghi chú: Kết quả chi tiết từng file được lưu trong thư mục cl_streaming/cl_results/"
+
+# ------------------------------------------------------------------------------
+# 5. TRỰC QUAN HÓA KẾT QUẢ
+# ------------------------------------------------------------------------------
+echo "=== 5. TRỰC QUAN HÓA: FORGETTING ==="
+python ../experiments/tradeoff_time_accuracy_plot.py --plot forgetting
+
+echo "=== 6. TRỰC QUAN HÓA: TRADE-OFF THỜI GIAN vs ĐỘ CHÍNH XÁC ==="
+python ../experiments/tradeoff_time_accuracy_plot.py --plot tradeoff
