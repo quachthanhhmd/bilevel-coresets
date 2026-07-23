@@ -19,7 +19,8 @@ datasets = ['permmnist', 'splitmnist', 'splitfashionmnist']
 methods = ['uniform', 'coreset',
            'kmeans_features', 'kcenter_features', 'kmeans_grads',
            'kmeans_embedding', 'kcenter_embedding', 'kcenter_grads',
-           'entropy', 'hardest', 'frcl', 'icarl', 'grad_matching']
+           'entropy', 'hardest', 'frcl', 'icarl', 'grad_matching',
+           'sensitivity', 'glister']
 
 
 def get_kernel_fn(dataset):

@@ -15,6 +15,12 @@ def mnist_transforms():
     ])
 
 
+def fashion_mnist_transforms():
+    return transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize((0.2860,), (0.3530,))
+    ])
+
 class NumpyDataset(Dataset):
     def __init__(self, data, target, transform=None):
         self.data = torch.from_numpy(data).type(torch.float)
@@ -105,9 +111,9 @@ class SplitFashionMnistGenerator(DataGenerator):
     def __init__(self, limit_per_task=1000):
         super().__init__(limit_per_task)
 
-        train_dataset = datasets.FashionMNIST('data/FashionMNIST', train=True, transform=mnist_transforms(),
+        train_dataset = datasets.FashionMNIST('data/FashionMNIST', train=True, transform=fashion_mnist_transforms(),
                                        download=True)
-        test_dataset = datasets.FashionMNIST('data/FashionMNIST/', train=False, transform=mnist_transforms(),
+        test_dataset = datasets.FashionMNIST('data/FashionMNIST/', train=False, transform=fashion_mnist_transforms(),
                                       download=True)
 
         train_loader = DataLoader(train_dataset, batch_size=len(train_dataset))

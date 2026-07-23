@@ -89,7 +89,7 @@ def plot_average_forgetting() -> None:
     ax.set_title("Average Forgetting on SplitFashionMNIST (5 tasks)")
     ax.set_ylim(0, max(forgetting_values) + 10)
 
-    for bar, value in zip(bars, forgetting_values, strict=True):
+    for bar, value in zip(bars, forgetting_values):
         ax.text(
             bar.get_x() + bar.get_width() / 2,
             bar.get_height() + 0.6,
@@ -147,7 +147,7 @@ def plot_tradeoff() -> None:
     fig, ax = plt.subplots(figsize=(7.5, 5.2))
 
     for method, time_value, acc_value, color, marker in zip(
-        methods, training_time, average_accuracy, colors, markers, strict=True
+        methods, training_time, average_accuracy, colors, markers
     ):
         ax.scatter(
             time_value,
