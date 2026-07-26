@@ -9,6 +9,7 @@ Usage:
     python baseline_comparison_plot.py --plot accuracy
     python baseline_comparison_plot.py --plot forgetting
     python baseline_comparison_plot.py --plot tradeoff
+    python baseline_comparison_plot.py --plot ablation
     python baseline_comparison_plot.py --plot all
 """
 
@@ -32,10 +33,10 @@ METHODS = {
     "Coreset (Bilevel)": "coreset",
 }
 COLORS = {
-    "Uniform": "#d62728",
-    "Sensitivity Coreset": "#1f77b4",
-    "GLISTER": "#9467bd",
-    "Coreset (Bilevel)": "#2ca02c",
+    "Uniform": "#2a78d6",
+    "Sensitivity Coreset": "#4a3aa7",
+    "GLISTER": "#e34948",
+    "Coreset (Bilevel)": "#008300",
 }
 MARKERS = {
     "Uniform": "o",
@@ -51,6 +52,15 @@ FALLBACK = {
     "GLISTER": {"test_acc": 76.00, "execution_time": 210, "forgetting": 13.2},
     "Coreset (Bilevel)": {"test_acc": 76.67, "execution_time": 140, "forgetting": 10.8},
 }
+
+# Ablation study (chỉ chạy cho Coreset, seed=0, theo run_experiments.sh bước 2-3):
+# buffer size quét ở beta=1.0 cố định, beta quét ở buffer_size=100 cố định.
+ABLATION_BUFFER_SIZES = [50, 100, 200]
+ABLATION_BETAS = [0.01, 1.0, 100.0]
+ABLATION_FALLBACK_BY_BUFFER = {50: 66.05, 100: 73.30, 200: 77.74}
+ABLATION_FALLBACK_BY_BETA = {0.01: 66.28, 1.0: 73.30, 100.0: 76.77}
+ABLATION_TIME_FALLBACK_BY_BUFFER = {50: 91.2, 100: 121.2, 200: 195.9}
+ABLATION_TIME_FALLBACK_BY_BETA = {0.01: 124.2, 1.0: 121.2, 100.0: 122.9}
 
 
 def get_results_dir() -> str:
@@ -83,7 +93,7 @@ def load_results(dataset: str, buffer_size: int, beta: float, seeds: list) -> di
             with open(file_path, "r") as f:
                 data = json.load(f)
             if "test_acc" in data:
-                accs.append(data["test_acc"] * 100.0)
+                accs.append(data["test_acc"])  # training.Training.test() đã trả về thang phần trăm (0-100)
             if "execution_time" in data:
                 times.append(data["execution_time"])
             if "acc_matrix" in data:
@@ -109,6 +119,91 @@ def load_results(dataset: str, buffer_size: int, beta: float, seeds: list) -> di
                 "is_synthetic": True,
             }
     return results
+
+
+def load_ablation_point(dataset: str, method: str, buffer_size: int, beta: float, seed: int) -> dict | None:
+    """Load a single (buffer_size, beta) result point for the ablation sweep, if it exists."""
+    results_dir = get_results_dir()
+    file_path = f"{results_dir}/{dataset}_{method}_{buffer_size}_{beta}_{seed}.txt"
+    if not os.path.exists(file_path):
+        return None
+    with open(file_path, "r") as f:
+        data = json.load(f)
+    return {"test_acc": data.get("test_acc"), "execution_time": data.get("execution_time")}
+
+
+def plot_ablation(dataset: str, method: str = "coreset", seed: int = 0) -> None:
+    """Plot the buffer-size and beta sensitivity sweeps (single-seed, no error bars)."""
+    display_name = [k for k, v in METHODS.items() if v == method][0]
+    color, marker = COLORS[display_name], MARKERS[display_name]
+
+    buffer_accs, buffer_times, buffer_synthetic = [], [], False
+    for bs in ABLATION_BUFFER_SIZES:
+        point = load_ablation_point(dataset, method, bs, 1.0, seed)
+        if point is None:
+            buffer_synthetic = True
+            buffer_accs.append(ABLATION_FALLBACK_BY_BUFFER[bs])
+            buffer_times.append(ABLATION_TIME_FALLBACK_BY_BUFFER[bs])
+        else:
+            buffer_accs.append(point["test_acc"])
+            buffer_times.append(point["execution_time"])
+
+    beta_accs, beta_times, beta_synthetic = [], [], False
+    for beta in ABLATION_BETAS:
+        point = load_ablation_point(dataset, method, 100, beta, seed)
+        if point is None:
+            beta_synthetic = True
+            beta_accs.append(ABLATION_FALLBACK_BY_BETA[beta])
+            beta_times.append(ABLATION_TIME_FALLBACK_BY_BETA[beta])
+        else:
+            beta_accs.append(point["test_acc"])
+            beta_times.append(point["execution_time"])
+
+    if buffer_synthetic or beta_synthetic:
+        print(f"Warning: Thiếu file kết quả ablation cho '{display_name}' ({method}, seed={seed}). "
+              "Dùng dữ liệu minh họa cho phần còn thiếu.")
+
+    fig, axes = plt.subplots(2, 2, figsize=(10, 7.5))
+
+    def _line(ax, x, y, xlabel, title, log_x=False):
+        ax.plot(x, y, color=color, marker=marker, markersize=9, markeredgecolor="black",
+                markeredgewidth=0.8, linewidth=2)
+        for xi, yi in zip(x, y):
+            ax.annotate(f"{yi:.2f}", (xi, yi), textcoords="offset points", xytext=(0, 8),
+                        ha="center", fontsize=9, fontweight="semibold")
+        if log_x:
+            ax.set_xscale("log")
+        ax.set_xticks(x)
+        ax.set_xticklabels([str(v) for v in x])
+        ax.set_xlabel(xlabel)
+        ax.set_title(title, fontsize=11)
+
+    _line(axes[0, 0], ABLATION_BUFFER_SIZES, buffer_accs, "Buffer size",
+          f"Accuracy theo Buffer size ({display_name}, β=1.0)")
+    axes[0, 0].set_ylabel("Test Accuracy (%)")
+
+    _line(axes[0, 1], ABLATION_BETAS, beta_accs, "Beta (thang log)",
+          f"Accuracy theo Beta ({display_name}, buffer=100)", log_x=True)
+    axes[0, 1].set_ylabel("Test Accuracy (%)")
+
+    _line(axes[1, 0], ABLATION_BUFFER_SIZES, buffer_times, "Buffer size",
+          f"Thời gian huấn luyện theo Buffer size ({display_name}, β=1.0)")
+    axes[1, 0].set_ylabel("Thời gian (giây)")
+
+    _line(axes[1, 1], ABLATION_BETAS, beta_times, "Beta (thang log)",
+          f"Thời gian huấn luyện theo Beta ({display_name}, buffer=100)", log_x=True)
+    axes[1, 1].set_ylabel("Thời gian (giây)")
+
+    fig.suptitle(f"Ablation study — {display_name} trên {dataset} (seed={seed}, không có error bar)",
+                 fontsize=13, y=1.00)
+    if buffer_synthetic or beta_synthetic:
+        fig.text(0.01, 0.005, "* một phần dữ liệu là minh họa (chưa có file kết quả thật)",
+                  fontsize=9, style="italic", color="gray")
+
+    plt.tight_layout()
+    output_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "coreset_ablation.png")
+    plt.savefig(output_path, dpi=300, bbox_inches="tight")
+    print(f"Đã lưu biểu đồ Ablation tại: {output_path}")
 
 
 def _mark_synthetic_note(ax, results: dict) -> None:
@@ -203,11 +298,13 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="So sánh Coreset (Bilevel) với các baseline Sensitivity Coreset và GLISTER"
     )
-    parser.add_argument("--plot", choices=["accuracy", "forgetting", "tradeoff", "all"], default="all")
+    parser.add_argument("--plot", choices=["accuracy", "forgetting", "tradeoff", "ablation", "all"], default="all")
     parser.add_argument("--dataset", default="splitfashionmnist")
     parser.add_argument("--buffer_size", type=int, default=100)
     parser.add_argument("--beta", type=float, default=1.0)
     parser.add_argument("--seeds", default="0,1,2", help="Comma-separated seeds, e.g. 0,1,2")
+    parser.add_argument("--ablation_method", default="coreset", help="Method whose ablation sweep to plot")
+    parser.add_argument("--ablation_seed", type=int, default=0, help="Seed used for the ablation sweep")
     return parser.parse_args()
 
 
@@ -220,6 +317,8 @@ def main() -> None:
         plot_forgetting_comparison(args.dataset, args.buffer_size, args.beta, seeds)
     if args.plot in ("tradeoff", "all"):
         plot_tradeoff_comparison(args.dataset, args.buffer_size, args.beta, seeds)
+    if args.plot in ("ablation", "all"):
+        plot_ablation(args.dataset, args.ablation_method, args.ablation_seed)
 
 
 if __name__ == "__main__":

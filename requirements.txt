@@ -9,3 +9,7 @@ jaxlib==0.1.55
 neural-tangents==0.3.4
 seaborn==0.10.1
 tqdm==4.36.1
+# The `bicoreset/` package (JMLR 2024 extensions) only needs numpy and torch,
+# but it uses torch.linalg, so it requires torch>=1.11 rather than the 1.6 pinned above.
+# only needed for `pytest tests/`
+pytest>=6.0

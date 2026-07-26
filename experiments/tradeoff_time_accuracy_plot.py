@@ -18,6 +18,14 @@ import seaborn as sns
 sns.set_style("whitegrid")
 plt.rcParams.update({"font.size": 12})
 
+# Bảng màu categorical, đã kiểm định CVD-safe/in-ấn qua dataviz skill's validator
+# (giữ nhất quán với experiments/baseline_comparison_plot.py cho cùng một method).
+COLORS = {
+    "Uniform": "#2a78d6",
+    "KMeans": "#1baf7a",
+    "Coreset": "#008300",
+}
+
 
 def get_results_dir() -> str:
     """Returns the absolute path to cl_results directory."""
@@ -46,8 +54,9 @@ def load_real_accuracy_matrices(results_dir: str = None) -> dict[str, np.ndarray
                         all_matrices.append(np.array(data["acc_matrix"]))
         
         if all_matrices:
-            # Trung bình cộng ma trận theo các seed
-            matrices[display_name] = np.mean(all_matrices, axis=0) * 100.0  # Convert to percentage
+            # Trung bình cộng ma trận theo các seed. training.Training.test() đã trả về
+            # giá trị phần trăm (0-100) nên không cần nhân lại với 100 ở đây.
+            matrices[display_name] = np.mean(all_matrices, axis=0)
         else:
             print(f"Warning: No valid acc_matrix found for {display_name}. Falling back to synthetic.")
             # Dummy fallback just in case
@@ -82,7 +91,7 @@ def plot_average_forgetting() -> None:
     forgetting_values = [average_forgetting(matrices[method]) for method in methods]
 
     fig, ax = plt.subplots(figsize=(7.2, 4.8))
-    colors = ["#d62728", "#ff7f0e", "#2ca02c"]
+    colors = [COLORS[m] for m in methods]
     bars = ax.bar(methods, forgetting_values, color=colors, edgecolor="black", linewidth=1.0)
 
     ax.set_ylabel("Average Forgetting (%)")
@@ -128,7 +137,7 @@ def plot_tradeoff() -> None:
                     data = json.load(f)
                     if "execution_time" in data and "test_acc" in data:
                         times.append(data["execution_time"])
-                        accs.append(data["test_acc"] * 100.0) # Convert to percentage
+                        accs.append(data["test_acc"])  # đã ở thang phần trăm (0-100)
         
         if times and accs:
             training_time.append(np.mean(times))
@@ -141,7 +150,7 @@ def plot_tradeoff() -> None:
             training_time.append(fallback_time[display_name])
             average_accuracy.append(fallback_acc[display_name])
 
-    colors = ["#d62728", "#ff7f0e", "#2ca02c"]
+    colors = [COLORS[m] for m in methods]
     markers = ["o", "s", "D"]
 
     fig, ax = plt.subplots(figsize=(7.5, 5.2))

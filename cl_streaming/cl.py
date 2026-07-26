@@ -2,7 +2,6 @@ import argparse
 import torch
 import numpy as np
 import random as rnd
-import jax_patch
 import os
 import json
 import time
@@ -10,13 +9,21 @@ from torch.utils.data import DataLoader
 import loss_utils
 import models
 import bilevel_coreset
+from bicoreset.direct import BilevelCoreset as DirectBilevelCoreset
+from bicoreset import losses as bico_losses
 from cl_streaming import summary
 from cl_streaming import datagen
 from cl_streaming import training
-from cl_streaming import ntk_generator
+# jax_patch and ntk_generator are only needed by method == 'coreset' (the NTK-proxy
+# construction); importing them lazily lets 'coreset_direct' and all other methods
+# run on a plain torch install, without jax/neural-tangents.
 
 datasets = ['permmnist', 'splitmnist', 'splitfashionmnist']
-methods = ['uniform', 'coreset',
+# 'coreset' builds the coreset on an NTK proxy (bilevel_coreset.py, Sec. 3.5.2 of the
+# JMLR paper); 'coreset_direct' builds it directly on the target model being trained
+# (bicoreset.direct.BilevelCoreset, Sec. 3.3/3.5.1) -- no proxy, but much slower since
+# it retrains the model at every forward-selection step.
+methods = ['uniform', 'coreset', 'coreset_direct',
            'kmeans_features', 'kcenter_features', 'kmeans_grads',
            'kmeans_embedding', 'kcenter_embedding', 'kcenter_grads',
            'entropy', 'hardest', 'frcl', 'icarl', 'grad_matching',
@@ -24,6 +31,8 @@ methods = ['uniform', 'coreset',
 
 
 def get_kernel_fn(dataset):
+    import jax_patch  # noqa: F401  (hot-patches jax; must be imported before neural_tangents)
+    from cl_streaming import ntk_generator
     if dataset == 'permmnist':
         return lambda x, y: ntk_generator.generate_fnn_ntk(x.reshape(-1, 28 * 28), y.reshape(-1, 28 * 28))
     else:
@@ -70,11 +79,34 @@ def continual_learning(args):
         model = models.ConvNet(nr_classes).to(device)
 
     training_op = training.Training(model, device, nr_epochs, beta=beta)
-    kernel_fn = get_kernel_fn(dataset)
+    # computed lazily on first use inside the loop -- only method == 'coreset' needs it
+    kernel_fn = get_kernel_fn(dataset) if method == 'coreset' else None
 
     bc = bilevel_coreset.BilevelCoreset(outer_loss_fn=loss_utils.cross_entropy,
                                         inner_loss_fn=loss_utils.cross_entropy, out_dim=10, max_outer_it=1,
                                         max_inner_it=200, logging_period=1000)
+
+    # 'coreset_direct': same Algorithm 1 selection rule as 'coreset', but the inner
+    # problem is solved on the actual target model (models.FNNet/ConvNet) instead of
+    # a kernel proxy. model_fn is re-instantiated at every forward-selection step
+    # (retrain_from_scratch=True), which is why this is much slower per task than
+    # the proxy-based 'coreset'.
+    if dataset == 'permmnist':
+        direct_model_fn = lambda: models.FNNet(28 * 28, 100, nr_classes).to(device)
+    else:
+        direct_model_fn = lambda: models.ConvNet(nr_classes).to(device)
+    direct_bc = DirectBilevelCoreset(
+        model_fn=direct_model_fn,
+        loss_fn=bico_losses.cross_entropy,
+        inner_reg=inner_reg,
+        ihvp='neumann', ihvp_kwargs={'num_terms': 30, 'alpha': 0.01, 'damping': 1e-3},
+        max_inner_it=100, inner_lr=5e-4,
+        max_outer_it=0,                 # binary (unweighted) coreset, Sec. 3.5.1
+        candidate_pool_size=300,        # candidates scored per selection step
+        hessian_batch_size=64,          # stochastic Hessian, Sec. 5.2.3
+        retrain_from_scratch=True,
+        device=device, verbose=False)
+
     rs = np.random.RandomState(args.seed)
     
     # Ma trận lưu độ chính xác: acc_matrix[i][j] là độ chính xác trên task j sau khi học xong task i
@@ -93,6 +125,12 @@ def continual_learning(args):
         if method == 'coreset':
             chosen_inds, _, = bc.build_with_representer_proxy_batch(X, y, size_per_task, kernel_fn, cache_kernel=True,
                                                                     start_size=1, inner_reg=inner_reg)
+        elif method == 'coreset_direct':
+            selection_batch = max(1, size_per_task // 10)
+            chosen_inds, _ = direct_bc.build(
+                torch.from_numpy(X).float(), torch.from_numpy(y).long(), size_per_task,
+                strategy='forward', selection_batch_size=selection_batch,
+                start_size=min(selection_batch, size_per_task))
         else:
             summarizer = summary.Summarizer.factory(method, rs)
             chosen_inds = summarizer.build_summary(X, y, size_per_task, method=method, model=model, device=device)
