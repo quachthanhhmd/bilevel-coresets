@@ -14,23 +14,13 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+# Reuse the single source of truth for method names/colors/markers/fallback numbers
+# so this script always shows the same methods as baseline_comparison_plot.py.
+from baseline_comparison_plot import METHODS, COLORS, MARKERS, FALLBACK, get_results_dir
+
 
 sns.set_style("whitegrid")
 plt.rcParams.update({"font.size": 12})
-
-# Bảng màu categorical, đã kiểm định CVD-safe/in-ấn qua dataviz skill's validator
-# (giữ nhất quán với experiments/baseline_comparison_plot.py cho cùng một method).
-COLORS = {
-    "Uniform": "#2a78d6",
-    "KMeans": "#1baf7a",
-    "Coreset": "#008300",
-}
-
-
-def get_results_dir() -> str:
-    """Returns the absolute path to cl_results directory."""
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    return os.path.join(base_dir, "..", "cl_streaming", "cl_results")
 
 
 def load_real_accuracy_matrices(results_dir: str = None) -> dict[str, np.ndarray]:
@@ -39,11 +29,10 @@ def load_real_accuracy_matrices(results_dir: str = None) -> dict[str, np.ndarray
         results_dir = get_results_dir()
 
     dataset = "splitfashionmnist"
-    methods = {"Uniform": "uniform", "KMeans": "kmeans_features", "Coreset": "coreset"}
     seeds = [0, 1, 2]
-    
+
     matrices = {}
-    for display_name, method in methods.items():
+    for display_name, method in METHODS.items():
         all_matrices = []
         for seed in seeds:
             file_path = f"{results_dir}/{dataset}_{method}_100_1.0_{seed}.txt"
@@ -57,9 +46,9 @@ def load_real_accuracy_matrices(results_dir: str = None) -> dict[str, np.ndarray
             # Trung bình cộng ma trận theo các seed. training.Training.test() đã trả về
             # giá trị phần trăm (0-100) nên không cần nhân lại với 100 ở đây.
             matrices[display_name] = np.mean(all_matrices, axis=0)
-        else:
+        elif display_name in FALLBACK:
             print(f"Warning: No valid acc_matrix found for {display_name}. Falling back to synthetic.")
-            # Dummy fallback just in case
+            # Dummy fallback, only for the 5 methods this repo originally shipped with.
             matrices[display_name] = np.array([
                 [89.0, 0.0, 0.0, 0.0, 0.0],
                 [84.0, 87.0, 0.0, 0.0, 0.0],
@@ -67,7 +56,9 @@ def load_real_accuracy_matrices(results_dir: str = None) -> dict[str, np.ndarray
                 [62.0, 64.0, 70.0, 83.0, 0.0],
                 [52.0, 54.0, 58.0, 68.0, 81.0],
             ])
-            
+        else:
+            print(f"Warning: No valid acc_matrix (and no fallback) for {display_name}. Skipping it.")
+
     return matrices
 
 
@@ -117,17 +108,15 @@ def plot_average_forgetting() -> None:
 
 
 def plot_tradeoff() -> None:
-    methods_map = {"Uniform": "uniform", "KMeans": "kmeans_features", "Coreset": "coreset"}
-    methods = list(methods_map.keys())
-    
-    training_time = []
-    average_accuracy = []
-    
     dataset = "splitfashionmnist"
     seeds = [0, 1, 2]
     results_dir = get_results_dir()
-    
-    for display_name, method in methods_map.items():
+
+    methods = []
+    training_time = []
+    average_accuracy = []
+
+    for display_name, method in METHODS.items():
         times = []
         accs = []
         for seed in seeds:
@@ -138,20 +127,22 @@ def plot_tradeoff() -> None:
                     if "execution_time" in data and "test_acc" in data:
                         times.append(data["execution_time"])
                         accs.append(data["test_acc"])  # đã ở thang phần trăm (0-100)
-        
+
+        fallback = FALLBACK.get(display_name)
         if times and accs:
+            methods.append(display_name)
             training_time.append(np.mean(times))
             average_accuracy.append(np.mean(accs))
-        else:
+        elif fallback:
             print(f"Warning: Missing real data for {display_name}. Using synthetic fallback.")
-            # Fallback
-            fallback_time = {"Uniform": 80, "KMeans": 100, "Coreset": 140}
-            fallback_acc = {"Uniform": 74.46, "KMeans": 75.92, "Coreset": 76.67}
-            training_time.append(fallback_time[display_name])
-            average_accuracy.append(fallback_acc[display_name])
+            methods.append(display_name)
+            training_time.append(fallback["execution_time"])
+            average_accuracy.append(fallback["test_acc"])
+        else:
+            print(f"Warning: Missing real data (and no fallback) for {display_name}. Skipping it.")
 
     colors = [COLORS[m] for m in methods]
-    markers = ["o", "s", "D"]
+    markers = [MARKERS[m] for m in methods]
 
     fig, ax = plt.subplots(figsize=(7.5, 5.2))
 
@@ -183,8 +174,8 @@ def plot_tradeoff() -> None:
     ax.set_xlabel("Training Time (Seconds)")
     ax.set_ylabel("Average Accuracy (%)")
     ax.set_title("Trade-off Between Training Time and Average Accuracy")
-    ax.set_xlim(0, 160)
-    ax.set_ylim(0, 82)
+    ax.set_xlim(0, max(training_time) * 1.25)
+    ax.set_ylim(0, max(average_accuracy) * 1.15)
     ax.legend(frameon=True, loc="lower right")
 
     plt.tight_layout()

@@ -1,3 +1,4 @@
+import copy
 import numpy as np
 from abc import ABC, abstractmethod
 import torch
@@ -31,6 +32,7 @@ class Summarizer(ABC):
         if type == 'grad_matching': return GradMatching(rs)
         if type == 'sensitivity': return SensitivitySampling(rs)
         if type == 'glister': return GlisterSelection(rs)
+        if type == 'forgetting': return ForgettingSelection(rs)
         raise TypeError('Unkown summarizer type ' + type)
 
     factory = staticmethod(factory)
@@ -335,3 +337,75 @@ class GlisterSelection(KmeansGradSpace):
         order = np.argsort(scores)[::-1][:size]
         inds = pool_inds[order]
         return inds
+
+
+class ForgettingSelection(Summarizer):
+    """"Forgetting events" selection (Toneva et al., "An Empirical Study of Example
+    Forgetting during Deep Neural Network Learning", ICLR 2019).
+
+    A forgetting event is a transition from being classified correctly to incorrectly
+    at two consecutive training checkpoints; examples that are forgotten often (or
+    never learned correctly in the first place) sit near the decision boundary and
+    are the most informative to keep. Referenced repeatedly in the JMLR paper as a
+    strong baseline (Sec. 5.2.2, 5.2.3, Table 1) but not previously implemented here.
+
+    Unlike the other summarizers, forgetting events can only be observed over a
+    training trajectory, not read off a single already-converged snapshot -- and the
+    `model` passed in by cl.py has already finished training on the current task by
+    the time build_summary() is called. So this reinitializes a fresh copy of the
+    same architecture (via `reset_parameters()` on every submodule that has one --
+    true for the `nn.Linear`/`nn.Conv2d` layers used by every model in this repo) and
+    trains it from scratch for `forgetting_epochs` short epochs on (X, y), which is
+    enough for forgetting statistics to emerge without paying for the full training
+    schedule used elsewhere in the paper's own experiments.
+    """
+
+    def build_summary(self, X, y, size, **kwargs):
+        model = kwargs['model']
+        device = kwargs['device']
+        n_epochs = kwargs.get('forgetting_epochs', 20)
+        lr = kwargs.get('forgetting_lr', 1e-3)
+        batch_size = kwargs.get('forgetting_batch_size', 128)
+
+        net = copy.deepcopy(model).to(device)
+        for module in net.modules():
+            if hasattr(module, 'reset_parameters'):
+                module.reset_parameters()
+
+        X_t = torch.from_numpy(X).float().to(device)
+        y_t = torch.from_numpy(y).long().to(device)
+        n = X_t.shape[0]
+        bs = min(batch_size, n)
+
+        optimizer = torch.optim.Adam(net.parameters(), lr=lr)
+        was_correct = np.zeros(n, dtype=bool)
+        ever_correct = np.zeros(n, dtype=bool)
+        forget_counts = np.zeros(n, dtype=np.int64)
+
+        for _ in range(n_epochs):
+            perm = self.rs.permutation(n)
+            net.train()
+            for start in range(0, n, bs):
+                idx = perm[start:start + bs]
+                optimizer.zero_grad()
+                loss = F.cross_entropy(net(X_t[idx]), y_t[idx])
+                loss.backward()
+                optimizer.step()
+
+            net.eval()
+            with torch.no_grad():
+                preds = net(X_t).argmax(dim=1).cpu().numpy()
+            now_correct = (preds == y)
+            forget_counts += (was_correct & ~now_correct).astype(np.int64)
+            ever_correct |= now_correct
+            was_correct = now_correct
+
+        # examples never classified correctly are treated as maximally
+        # "forgettable" (Toneva et al.'s convention for unlearned examples)
+        score = forget_counts.astype(np.float64)
+        score[~ever_correct] = np.inf
+        # random tie-break so ties (e.g. many zero-forgetting examples) don't
+        # get selected in a biased (e.g. index) order
+        tie_break = self.rs.uniform(0, 1e-6, size=n)
+        order = np.argsort(-(score + tie_break))
+        return order[:size]

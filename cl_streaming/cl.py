@@ -26,7 +26,7 @@ datasets = ['permmnist', 'splitmnist', 'splitfashionmnist']
 methods = ['uniform', 'coreset', 'coreset_direct',
            'kmeans_features', 'kcenter_features', 'kmeans_grads',
            'kmeans_embedding', 'kcenter_embedding', 'kcenter_grads',
-           'entropy', 'hardest', 'frcl', 'icarl', 'grad_matching',
+           'entropy', 'hardest', 'frcl', 'icarl', 'grad_matching', 'forgetting',
            'sensitivity', 'glister']
 
 

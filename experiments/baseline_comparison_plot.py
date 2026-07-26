@@ -1,9 +1,14 @@
-"""Compare the bilevel Coreset method against the Sensitivity Coreset and GLISTER baselines.
+"""Compare the bilevel Coreset method against Uniform, k-means and other baselines.
 
-Reads result files produced by `cl_streaming/cl.py` (methods: uniform, sensitivity,
-glister, coreset) from `cl_streaming/cl_results/`. If a method/seed combination hasn't
-been run yet, falls back to illustrative synthetic numbers (marked with a "*" on the
-plot) so the script is runnable before the full experiment sweep finishes.
+Reads result files produced by `cl_streaming/cl.py` from `cl_streaming/cl_results/`.
+METHODS below covers the paper's full Table 3 continual-learning baseline set
+(k-means/k-center of features, embeddings and grads; gradient matching; max entropy;
+hardest; FRCL; iCaRL; BiCo) plus the 2 extra baselines added in this repo (Sensitivity
+Coreset, GLISTER). For the 5 original methods (uniform, kmeans_features, sensitivity,
+glister, coreset), a missing method/seed combination falls back to illustrative
+synthetic numbers (marked with a "*" on the plot). The newer Table-3 methods have no
+established reference numbers yet, so they are simply skipped (with a warning) until
+you run `cl.py --method <name>` for them -- see `run_experiments.sh --methods`.
 
 Usage:
     python baseline_comparison_plot.py --plot accuracy
@@ -28,26 +33,63 @@ plt.rcParams.update({"font.size": 12})
 
 METHODS = {
     "Uniform": "uniform",
+    "KMeans (features)": "kmeans_features",
+    "KMeans (embedding)": "kmeans_embedding",
+    "KMeans (grads)": "kmeans_grads",
+    "KCenter (features)": "kcenter_features",
+    "KCenter (embedding)": "kcenter_embedding",
+    "KCenter (grads)": "kcenter_grads",
+    "Gradient Matching": "grad_matching",
+    "Max Entropy": "entropy",
+    "Hardest": "hardest",
+    "FRCL": "frcl",
+    "iCaRL": "icarl",
     "Sensitivity Coreset": "sensitivity",
     "GLISTER": "glister",
     "Coreset (Bilevel)": "coreset",
 }
 COLORS = {
     "Uniform": "#2a78d6",
+    "KMeans (features)": "#e58a1a",
+    "KMeans (embedding)": "#f4b942",
+    "KMeans (grads)": "#c9781f",
+    "KCenter (features)": "#17becf",
+    "KCenter (embedding)": "#0e7c87",
+    "KCenter (grads)": "#0a5459",
+    "Gradient Matching": "#8c564b",
+    "Max Entropy": "#bcbd22",
+    "Hardest": "#7f7f7f",
+    "FRCL": "#e377c2",
+    "iCaRL": "#c785e0",
     "Sensitivity Coreset": "#4a3aa7",
     "GLISTER": "#e34948",
     "Coreset (Bilevel)": "#008300",
 }
 MARKERS = {
     "Uniform": "o",
+    "KMeans (features)": "v",
+    "KMeans (embedding)": "p",
+    "KMeans (grads)": "h",
+    "KCenter (features)": "<",
+    "KCenter (embedding)": ">",
+    "KCenter (grads)": "X",
+    "Gradient Matching": "*",
+    "Max Entropy": "d",
+    "Hardest": "P",
+    "FRCL": "8",
+    "iCaRL": "H",
     "Sensitivity Coreset": "^",
     "GLISTER": "s",
     "Coreset (Bilevel)": "D",
 }
 
-# Illustrative fallback numbers, only used for methods with no result files yet.
+# Illustrative fallback numbers, only for the 5 methods this repo originally shipped
+# with -- the newer Table-3 methods (kcenter_*, kmeans_embedding/grads, grad_matching,
+# entropy, hardest, frcl, icarl) have no established reference numbers, so they are
+# skipped (not fabricated) until real result files exist; see load_results().
 FALLBACK = {
     "Uniform": {"test_acc": 74.46, "execution_time": 80, "forgetting": 18.5},
+    "KMeans (features)": {"test_acc": 74.90, "execution_time": 82, "forgetting": 16.5},
     "Sensitivity Coreset": {"test_acc": 75.10, "execution_time": 95, "forgetting": 15.9},
     "GLISTER": {"test_acc": 76.00, "execution_time": 210, "forgetting": 13.2},
     "Coreset (Bilevel)": {"test_acc": 76.67, "execution_time": 140, "forgetting": 10.8},
@@ -101,23 +143,28 @@ def load_results(dataset: str, buffer_size: int, beta: float, seeds: list) -> di
                 if matrix.shape[0] > 1:
                     forgettings.append(average_forgetting(matrix))
 
+        fallback = FALLBACK.get(display_name)
         if accs:
             results[display_name] = {
                 "test_acc_mean": float(np.mean(accs)),
                 "test_acc_std": float(np.std(accs)),
-                "execution_time": float(np.mean(times)) if times else FALLBACK[display_name]["execution_time"],
-                "forgetting": float(np.mean(forgettings)) if forgettings else FALLBACK[display_name]["forgetting"],
+                "execution_time": float(np.mean(times)) if times else (
+                    fallback["execution_time"] if fallback else float("nan")),
+                "forgetting": float(np.mean(forgettings)) if forgettings else (
+                    fallback["forgetting"] if fallback else float("nan")),
                 "is_synthetic": False,
             }
-        else:
+        elif fallback:
             print(f"Warning: No result files found for '{display_name}' ({method}). Falling back to synthetic.")
             results[display_name] = {
-                "test_acc_mean": FALLBACK[display_name]["test_acc"],
+                "test_acc_mean": fallback["test_acc"],
                 "test_acc_std": 0.0,
-                "execution_time": FALLBACK[display_name]["execution_time"],
-                "forgetting": FALLBACK[display_name]["forgetting"],
+                "execution_time": fallback["execution_time"],
+                "forgetting": fallback["forgetting"],
                 "is_synthetic": True,
             }
+        else:
+            print(f"Warning: No result files (and no fallback) for '{display_name}' ({method}). Skipping it.")
     return results
 
 
@@ -216,22 +263,22 @@ def _mark_synthetic_note(ax, results: dict) -> None:
 
 def plot_accuracy_comparison(dataset: str, buffer_size: int, beta: float, seeds: list) -> None:
     results = load_results(dataset, buffer_size, beta, seeds)
-    methods = list(METHODS.keys())
+    methods = list(results.keys())  # only methods with real or fallback data (see load_results)
     means = [results[m]["test_acc_mean"] for m in methods]
     stds = [results[m]["test_acc_std"] for m in methods]
     colors = [COLORS[m] for m in methods]
 
-    fig, ax = plt.subplots(figsize=(8, 5))
+    fig, ax = plt.subplots(figsize=(max(8, 0.85 * len(methods)), 5.5))
     bars = ax.bar(methods, means, yerr=stds, capsize=5, color=colors, edgecolor="black", linewidth=1.0)
     for bar, mean, m in zip(bars, means, methods):
         label = f"{mean:.2f}%" + (" *" if results[m]["is_synthetic"] else "")
         ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + max(means) * 0.01, label,
-                ha="center", va="bottom", fontsize=11, fontweight="semibold")
+                ha="center", va="bottom", fontsize=9, fontweight="semibold", rotation=90 if len(methods) > 8 else 0)
 
     ax.set_ylabel("Test Accuracy (%)")
     ax.set_title(f"So sánh Độ chính xác trên {dataset} (buffer={buffer_size})")
-    ax.set_ylim(0, max(means) + 12)
-    plt.xticks(rotation=12)
+    ax.set_ylim(0, max(means) + (18 if len(methods) > 8 else 12))
+    plt.xticks(rotation=35, ha="right")
     _mark_synthetic_note(ax, results)
 
     plt.tight_layout()
@@ -242,21 +289,21 @@ def plot_accuracy_comparison(dataset: str, buffer_size: int, beta: float, seeds:
 
 def plot_forgetting_comparison(dataset: str, buffer_size: int, beta: float, seeds: list) -> None:
     results = load_results(dataset, buffer_size, beta, seeds)
-    methods = list(METHODS.keys())
+    methods = list(results.keys())  # only methods with real or fallback data (see load_results)
     forgetting_values = [results[m]["forgetting"] for m in methods]
     colors = [COLORS[m] for m in methods]
 
-    fig, ax = plt.subplots(figsize=(8, 5))
+    fig, ax = plt.subplots(figsize=(max(8, 0.85 * len(methods)), 5.5))
     bars = ax.bar(methods, forgetting_values, color=colors, edgecolor="black", linewidth=1.0)
     for bar, value, m in zip(bars, forgetting_values, methods):
         label = f"{value:.2f}" + (" *" if results[m]["is_synthetic"] else "")
         ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + max(forgetting_values) * 0.01, label,
-                ha="center", va="bottom", fontsize=11, fontweight="semibold")
+                ha="center", va="bottom", fontsize=9, fontweight="semibold", rotation=90 if len(methods) > 8 else 0)
 
     ax.set_ylabel("Average Forgetting (%)")
     ax.set_title(f"So sánh Forgetting trên {dataset} (buffer={buffer_size})")
-    ax.set_ylim(0, max(forgetting_values) + 8)
-    plt.xticks(rotation=12)
+    ax.set_ylim(0, max(forgetting_values) + (14 if len(methods) > 8 else 8))
+    plt.xticks(rotation=35, ha="right")
     _mark_synthetic_note(ax, results)
 
     plt.tight_layout()
@@ -267,7 +314,7 @@ def plot_forgetting_comparison(dataset: str, buffer_size: int, beta: float, seed
 
 def plot_tradeoff_comparison(dataset: str, buffer_size: int, beta: float, seeds: list) -> None:
     results = load_results(dataset, buffer_size, beta, seeds)
-    methods = list(METHODS.keys())
+    methods = list(results.keys())  # only methods with real or fallback data (see load_results)
 
     fig, ax = plt.subplots(figsize=(7.5, 5.2))
     for method in methods:
