@@ -33,14 +33,36 @@ means O(q * n) kernel evaluations rather than O(n^2), which is what makes
 Sec. 5.1 tractable at all, but with q=2048 landmarks and n up to 50000 CIFAR-10
 images this can still take hours on a single GPU. Reduce ``q`` and/or the
 number of images for a smoke test before committing to a full run.
+
+**``diagonal_spatial=True`` -- necessary, not just an optimization.** By
+default, ``neural_tangents`` keeps the *full* (H, W, H, W) spatial covariance
+at every conv layer (needed for an exact NTK), which blows up memory as
+O(n1 * n2 * H^2 * W^2): even a landmark batch as small as 128x64 pairs at
+32x32 needs >30GB and reliably OOMs on a single GPU. Setting
+``diagonal_spatial=True`` treats different spatial positions as uncorrelated,
+reducing this to O(n1 * n2 * H * W) -- this is a well-established, standard
+approximation in the ``neural_tangents`` library for scaling conv kernels to
+image sizes like CIFAR-10 (used in the library's own examples), but it *is* an
+additional approximation beyond an exact CNTK that the paper does not
+mention -- Arora et al. (2019) had the compute budget to keep the exact
+kernel. Report this as a known deviation if you cite this as a Sec. 5.1
+reproduction.
 """
 
 import numpy as np
 
 
 def build_cntk6_gap_kernel_fn(channels=64, depth=6, w_std=1.6, b_std=0.05,
-                              batch_size=64, n_classes=10):
+                              batch_size=16, n_classes=10):
     """Build a batched, jit-compiled CNTK-6 + global-average-pooling kernel fn.
+
+    Note on ``diagonal_spatial``: this function does NOT pass
+    ``diagonal_spatial`` to ``kernel_fn`` -- the architecture ends with
+    ``GlobalAvgPool``, which imposes ``Diagonal(input=NO, output=YES)``
+    (full spatial covariance on input, diagonal on output). Passing
+    ``diagonal_spatial=True`` conflicts with this and raises ``ValueError``.
+    Omitting it lets ``neural_tangents`` use the architecture's own
+    requirement. OOM is controlled by ``batch_size`` instead.
 
     Args:
         channels (int): number of channels per conv layer (does not change the
@@ -53,8 +75,11 @@ def build_cntk6_gap_kernel_fn(channels=64, depth=6, w_std=1.6, b_std=0.05,
             variance-halving effect of ReLU as depth grows, ``b_std=0.05``
             matches the convention already used elsewhere in this repo's
             ``cl_streaming/ntk_generator.py``).
-        batch_size (int): number of landmark columns scored per jit call
-            (memory/latency tradeoff, mirrors ``generate_cnn_ntk``).
+        batch_size (int): both ``X`` and ``Y`` are chunked to at most this many
+            examples per single ``kernel_fn`` (jit) call -- memory/latency
+            tradeoff, and critical for avoiding OOM. Full spatial covariance
+            uses O(batch^2 * H^2 * W^2) memory; batch_size=16 keeps this
+            under ~1 GB for 28x28 or 32x32 images.
         n_classes (int): output dimension of the (unused) readout layer --
             only the kernel function is used, not the readout, but ``stax``
             needs a full network definition.
@@ -75,16 +100,36 @@ def build_cntk6_gap_kernel_fn(channels=64, depth=6, w_std=1.6, b_std=0.05,
     layers += [stax.GlobalAvgPool()]
     layers += [stax.Dense(n_classes, w_std, b_std)]
     _, _, kernel_fn = stax.serial(*layers)
-    kernel_fn = jit(kernel_fn, static_argnums=(2,))
+    # static_argnums=(2,) marks the positional 'get' arg (='ntk') static.
+    # We do NOT pass diagonal_spatial to kernel_fn at call time: the architecture
+    # ends with GlobalAvgPool, which imposes its own spatial-covariance requirement
+    # (Diagonal(input=NO, output=YES)) -- passing diagonal_spatial=True conflicts
+    # with that and raises ValueError. Omitting it lets neural_tangents use the
+    # architecture's own requirement automatically.
+    # diagonal_batch is still passed explicitly (=False) so we declare it static
+    # to avoid TracerBoolConversionError (neural_tangents calls bool() on it
+    # during jit tracing).
+    kernel_fn = jit(kernel_fn, static_argnums=(2,),
+                    static_argnames=('diagonal_batch',))
 
     def kernel_fn_np(X, Y):
         X = np.asarray(X)
         Y = np.asarray(Y)
         n, m = len(X), len(Y)
         K = np.zeros((n, m), dtype=np.float32)
-        for start in range(0, m, batch_size):
-            end = min(start + batch_size, m)
-            K[:, start:end] = np.array(kernel_fn(X, Y[start:end], 'ntk'))
+        # Chunk *both* X and Y: a single kernel_fn(x1, x2) call materializes an
+        # intermediate tensor scaling with len(x1) * len(x2) * H^2 * W^2
+        # (full spatial covariance, required by GlobalAvgPool) -- leaving
+        # either side unchunked still OOMs once a side exceeds a few hundred.
+        # With batch_size=16 on 28x28 images: ~614 MB peak per chunk, feasible
+        # on T4/P100. For CIFAR-10 32x32: ~1 GB, still OK at batch_size=16.
+        for xi in range(0, n, batch_size):
+            xj = min(xi + batch_size, n)
+            for yi in range(0, m, batch_size):
+                yj = min(yi + batch_size, m)
+                K[xi:xj, yi:yj] = np.array(kernel_fn(
+                    X[xi:xj], Y[yi:yj], 'ntk',
+                    diagonal_batch=False))
         return K
 
     return kernel_fn_np

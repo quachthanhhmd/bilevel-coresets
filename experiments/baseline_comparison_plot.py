@@ -20,6 +20,7 @@ Usage:
 
 from __future__ import annotations
 
+import csv
 import json
 import os
 import argparse
@@ -48,6 +49,7 @@ METHODS = {
     "GLISTER": "glister",
     "Forgetting": "forgetting",
     "Coreset (Bilevel)": "coreset",
+    "Coreset (Nystrom-CNTK)": "coreset_nystrom",
 }
 COLORS = {
     "Uniform": "#2a78d6",
@@ -66,6 +68,7 @@ COLORS = {
     "GLISTER": "#e34948",
     "Forgetting": "#a52a2a",
     "Coreset (Bilevel)": "#008300",
+    "Coreset (Nystrom-CNTK)": "#1a7a4c",
 }
 MARKERS = {
     "Uniform": "o",
@@ -84,6 +87,7 @@ MARKERS = {
     "GLISTER": "s",
     "Forgetting": "x",
     "Coreset (Bilevel)": "D",
+    "Coreset (Nystrom-CNTK)": "*",
 }
 
 # Illustrative fallback numbers, only for the 5 methods this repo originally shipped
@@ -264,6 +268,31 @@ def _mark_synthetic_note(ax, results: dict) -> None:
         )
 
 
+def _export_table(results: dict, methods: list, columns: list, output_path: str) -> None:
+    """Write the exact numbers behind a comparison plot to a CSV table, so a
+    report can cite precise values instead of reading them off a chart.
+
+    Args:
+        results: output of load_results() (or a dict with the same shape).
+        methods: display names, in the order they should appear as rows.
+        columns: list of (csv_header, results_key, fmt) tuples, e.g.
+            ("Test Accuracy (%)", "test_acc_mean", "{:.2f}").
+        output_path: where to write the .csv file.
+    """
+    with open(output_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["Method"] + [header for header, _, _ in columns] + ["Synthetic"])
+        for method in methods:
+            res = results[method]
+            row = [method]
+            for _, key, fmt in columns:
+                value = res.get(key, float("nan"))
+                row.append(fmt.format(value) if value == value else "")  # NaN check
+            row.append("yes" if res.get("is_synthetic") else "no")
+            writer.writerow(row)
+    print(f"Đã lưu bảng số liệu tại: {output_path}")
+
+
 def plot_accuracy_comparison(dataset: str, buffer_size: int, beta: float, seeds: list) -> None:
     results = load_results(dataset, buffer_size, beta, seeds)
     methods = list(results.keys())  # only methods with real or fallback data (see load_results)
@@ -289,6 +318,12 @@ def plot_accuracy_comparison(dataset: str, buffer_size: int, beta: float, seeds:
     plt.savefig(output_path, dpi=300, bbox_inches="tight")
     print(f"Đã lưu biểu đồ So sánh Độ chính xác tại: {output_path}")
 
+    table_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "baseline_accuracy_comparison.csv")
+    _export_table(results, methods,
+                  [("Test Accuracy Mean (%)", "test_acc_mean", "{:.2f}"),
+                   ("Test Accuracy Std (%)", "test_acc_std", "{:.2f}")],
+                  table_path)
+
 
 def plot_forgetting_comparison(dataset: str, buffer_size: int, beta: float, seeds: list) -> None:
     results = load_results(dataset, buffer_size, beta, seeds)
@@ -313,6 +348,9 @@ def plot_forgetting_comparison(dataset: str, buffer_size: int, beta: float, seed
     output_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "baseline_forgetting_comparison.png")
     plt.savefig(output_path, dpi=300, bbox_inches="tight")
     print(f"Đã lưu biểu đồ So sánh Forgetting tại: {output_path}")
+
+    table_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "baseline_forgetting_comparison.csv")
+    _export_table(results, methods, [("Average Forgetting (%)", "forgetting", "{:.2f}")], table_path)
 
 
 def plot_tradeoff_comparison(dataset: str, buffer_size: int, beta: float, seeds: list) -> None:
@@ -342,6 +380,12 @@ def plot_tradeoff_comparison(dataset: str, buffer_size: int, beta: float, seeds:
     output_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "baseline_tradeoff_comparison.png")
     plt.savefig(output_path, dpi=300, bbox_inches="tight")
     print(f"Đã lưu biểu đồ Trade-off tại: {output_path}")
+
+    table_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "baseline_tradeoff_comparison.csv")
+    _export_table(results, methods,
+                  [("Training Time (s)", "execution_time", "{:.2f}"),
+                   ("Test Accuracy (%)", "test_acc_mean", "{:.2f}")],
+                  table_path)
 
 
 def parse_args() -> argparse.Namespace:

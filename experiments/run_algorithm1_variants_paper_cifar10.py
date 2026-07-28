@@ -48,8 +48,17 @@ Expect this to take a long time even on a Kaggle GPU (FashionMNIST's smaller
 scaling is otherwise the same). Features are cached to ``--features-cache-dir``
 after the first computation (keyed by dataset/seed/q/kernel hyperparameters)
 and reused by every subsequent method/size/seed run, which is the only way
-this is tractable to run more than once. Before committing to a full run, do
-a smoke test with small overrides, e.g.:
+this is tractable to run more than once.
+
+IMPORTANT -- memory: by default the CNTK kernel uses ``diagonal_spatial=True``
+(see :mod:`bicoreset.cntk`) and chunks both sides of every kernel_fn call to
+``--kernel-batch-size`` (default 16). Without this, a real run OOM'd on a
+Kaggle GPU trying to allocate >30GB for a single landmark batch -- the exact
+(non-diagonal-spatial) CNTK is essentially infeasible for CIFAR-10-sized
+images on typical single-GPU hardware. Don't pass ``--cntk-exact-spatial``
+unless you know your GPU has enough memory.
+
+Before committing to a full run, do a smoke test with small overrides, e.g.:
 
     python experiments/run_algorithm1_variants_paper_cifar10.py --method full \\
         --dataset fashionmnist --seed 0 --nystrom-dim 128 --train-pool-size 2000 \\
@@ -166,9 +175,9 @@ def split_train_val(X, y, val_frac=0.1, seed=0):
 # CNTK-Nystrom features (cached -- this is the expensive part)
 # ----------------------------------------------------------------------
 def _cache_key(args):
-    payload = 'ds={}_q={}_ch={}_depth={}_wstd={}_bstd={}_seed={}_pool={}_val={}'.format(
+    payload = 'ds={}_q={}_ch={}_depth={}_wstd={}_bstd={}_exact={}_seed={}_pool={}_val={}'.format(
         args.dataset, args.nystrom_dim, args.cntk_channels, args.cntk_depth, args.cntk_w_std,
-        args.cntk_b_std, args.seed, args.train_pool_size, args.val_size)
+        args.cntk_b_std, args.cntk_exact_spatial, args.seed, args.train_pool_size, args.val_size)
     return hashlib.md5(payload.encode()).hexdigest()[:16]
 
 
@@ -213,7 +222,8 @@ def compute_or_load_features(args):
     kernel_fn = build_cntk6_gap_kernel_fn(
         channels=args.cntk_channels, depth=args.cntk_depth,
         w_std=args.cntk_w_std, b_std=args.cntk_b_std,
-        batch_size=args.kernel_batch_size)
+        batch_size=args.kernel_batch_size,
+        diagonal_spatial=not args.cntk_exact_spatial)
 
     landmarks, _ = sample_landmarks(X_train, args.nystrom_dim, seed=args.seed)
     print('Fitting Nystrom map with {} landmarks...'.format(len(landmarks)))
@@ -431,8 +441,19 @@ def parse_args():
     parser.add_argument('--cntk-depth', type=int, default=6, help='paper: 6 ("six layers")')
     parser.add_argument('--cntk-w-std', type=float, default=1.6)
     parser.add_argument('--cntk-b-std', type=float, default=0.05)
-    parser.add_argument('--kernel-batch-size', type=int, default=64,
-                        help='landmark/image columns per jit call when evaluating the kernel')
+    parser.add_argument('--cntk-exact-spatial', action='store_true',
+                        help='use the exact (non-diagonal) spatial covariance for the CNTK conv '
+                             'layers instead of the diagonal_spatial=True approximation. This is '
+                             'closer to an exact CNTK but O(H^2*W^2) instead of O(H*W) in memory -- '
+                             'a single 32x32 pair already needs >30GB and reliably OOMs on typical '
+                             'single-GPU hardware (confirmed on a real Kaggle run). Leave off unless '
+                             'you know your GPU has enough memory for this')
+    parser.add_argument('--kernel-batch-size', type=int, default=16,
+                        help='both X and Y are chunked to at most this many examples per kernel_fn '
+                             'call (memory/latency tradeoff). Lowered from 64 to 16 by default after '
+                             'a real OOM at 64/128 with the exact-spatial kernel; the default '
+                             'diagonal_spatial=True kernel needs much less memory so you can likely '
+                             'raise this back up once --cntk-exact-spatial is off (the default)')
     parser.add_argument('--train-pool-size', type=int, default=None,
                         help='override: subsample the train partition to this many images '
                              '(smoke-test only; paper uses the full ~45000-image partition)')

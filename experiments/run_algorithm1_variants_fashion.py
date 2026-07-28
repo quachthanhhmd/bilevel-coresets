@@ -1,3 +1,4 @@
+#!DEPRECATED: this script use ConvNet, which is not used in the paper.
 """Practical variants of Algorithm 1, Sec. 5.1, on real FashionMNIST (ConvNet).
 
 This is the "real experiment" counterpart of ``demos/demo_algorithm1_variants.py``:

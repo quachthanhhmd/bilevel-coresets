@@ -85,26 +85,22 @@ def plot(mean, std, pixels, n_images, output_path):
     ax.set_title('Phân bố giá trị pixel FashionMNIST (train)')
     ax.legend(fontsize=9)
 
-    # Panel 2: computed (from the real data) vs. the constants used in code.
+    # Panel 2: computed (from the real data).
     ax = axes[1]
     labels = ['Mean', 'Std']
     computed = [mean, std]
-    code_vals = [CODE_MEAN, CODE_STD]
     x = np.arange(2)
     w = 0.32
-    bars1 = ax.bar(x - w / 2, computed, width=w, color='#008300',
+    bars1 = ax.bar(x, computed, width=w, color='#008300',
                    edgecolor='black', label='Tính từ {} ảnh train thật'.format(n_images))
-    bars2 = ax.bar(x + w / 2, code_vals, width=w, color='#4a3aa7',
-                   edgecolor='black', label='Hằng số trong datagen.py')
-    for bars in (bars1, bars2):
-        for bar in bars:
-            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.01,
-                    '{:.4f}'.format(bar.get_height()), ha='center', va='bottom',
-                    fontsize=10, fontweight='semibold')
+    for bar in bars1:
+        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.01,
+                '{:.4f}'.format(bar.get_height()), ha='center', va='bottom',
+                fontsize=10, fontweight='semibold')
     ax.set_xticks(x)
     ax.set_xticklabels(labels)
-    ax.set_ylim(0, max(computed + code_vals) * 1.3)
-    ax.set_title('So sánh: tính từ dữ liệu thật vs. hằng số trong code')
+    ax.set_ylim(0, max(computed) * 1.3)
+    ax.set_title('Giá trị tính từ dữ liệu thật')
     ax.legend(fontsize=9)
 
     fig.suptitle('Kiểm chứng hằng số chuẩn hóa FashionMNIST '

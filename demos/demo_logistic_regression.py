@@ -29,13 +29,26 @@ Pass ``--dataset fashion`` to instead run on real FashionMNIST, restricted to
 two commonly-confused classes (default: Pullover vs Shirt, the hardest pair
 in FashionMNIST) flattened to 784-d pixel vectors -- this needs torchvision
 + internet (e.g. on Kaggle), unavailable in this sandbox. ``--dataset all``
-runs both the sklearn pair and FashionMNIST.
+runs both the sklearn pair and FashionMNIST (on the *same* combined figure).
+
+Pass ``--dataset cifar10`` for real CIFAR-10 instead, restricted to two
+commonly-confused classes (default: Cat vs Dog, a standard "hardest pair" for
+CIFAR-10 in the literature) flattened to 3072-d pixel vectors -- same
+torchvision/internet requirement as ``fashion``. This is *not* included in
+``--dataset all`` on purpose: run ``--dataset fashion`` and ``--dataset
+cifar10`` as two separate invocations (with different ``--output`` paths) to
+keep the two on separate figures rather than combined into one, since they
+answer separate "does the paper's Sec. 5.2.2 setup transfer to dataset X"
+questions rather than a single comparison.
 
 Run with::
 
     python demos/demo_logistic_regression.py
     python demos/demo_logistic_regression.py --sizes 5,15,30,50 --seeds 3 --outer-iters 20
-    python demos/demo_logistic_regression.py --dataset fashion --sizes 10,30,60,100
+    python demos/demo_logistic_regression.py --dataset fashion --sizes 10,30,60,100 \\
+        --output demos/logistic_regression_coreset_accuracy_fashion.png
+    python demos/demo_logistic_regression.py --dataset cifar10 --sizes 10,30,60,100 \\
+        --output demos/logistic_regression_coreset_accuracy_cifar10.png
 """
 
 import argparse
@@ -121,16 +134,65 @@ def load_fashion_dataset(classes=(2, 6), max_samples=4000, data_root='data', see
     class_names = {2: 'Pullover', 6: 'Shirt', 0: 'T-shirt/top', 4: 'Coat'}
     a = class_names.get(classes[0], str(classes[0]))
     b = class_names.get(classes[1], str(classes[1]))
-    name = 'fashion {}-vs-{} (784d, {}pts)'.format(a, b, X.shape[0])
+    name = 'fashion {}-vs-{}'.format(a, b, X.shape[0])
     return name, torch.from_numpy(X).float(), torch.from_numpy(y).long()
 
 
-def load_datasets(which='sklearn', fashion_classes=(2, 6), fashion_max_samples=4000):
+def load_cifar10_dataset(classes=(3, 5), max_samples=4000, data_root='data', seed=0):
+    """Real CIFAR-10 restricted to two classes, flattened to 3072-d pixels.
+
+    Default classes (3, 5) = Cat vs Dog, a standard "hardest pair" for
+    CIFAR-10 (visually similar, most-confused pair for CNN classifiers in the
+    literature) -- same reasoning as ``fashion``'s Pullover-vs-Shirt default.
+    Needs torchvision + internet (e.g. on Kaggle); not available in this
+    sandbox.
+    """
+    import torchvision.datasets as tv_datasets
+    import torchvision.transforms as transforms
+    from sklearn.preprocessing import StandardScaler
+
+    transform = transforms.Compose([transforms.ToTensor()])
+    train = tv_datasets.CIFAR10(root=data_root, train=True, download=True, transform=transform)
+    test = tv_datasets.CIFAR10(root=data_root, train=False, download=True, transform=transform)
+
+    imgs, labels = [], []
+    for ds in (train, test):
+        targets = np.asarray(ds.targets)
+        mask = np.isin(targets, classes)
+        idx = np.nonzero(mask)[0]
+        for i in idx:
+            img, label = ds[i]
+            imgs.append(img.view(-1).numpy())
+            labels.append(label)
+    X = np.stack(imgs).astype(np.float32)
+    y = (np.asarray(labels) == classes[1]).astype(np.int64)
+
+    if max_samples is not None and X.shape[0] > max_samples:
+        rs = np.random.RandomState(seed)
+        keep = rs.choice(X.shape[0], max_samples, replace=False)
+        X, y = X[keep], y[keep]
+
+    X = StandardScaler().fit_transform(X)
+    class_names = {0: 'Airplane', 1: 'Automobile', 2: 'Bird', 3: 'Cat', 4: 'Deer',
+                   5: 'Dog', 6: 'Frog', 7: 'Horse', 8: 'Ship', 9: 'Truck'}
+    a = class_names.get(classes[0], str(classes[0]))
+    b = class_names.get(classes[1], str(classes[1]))
+    name = 'cifar10 {}-vs-{}'.format(a, b, X.shape[0])
+    return name, torch.from_numpy(X).float(), torch.from_numpy(y).long()
+
+
+def load_datasets(which='sklearn', fashion_classes=(2, 6), fashion_max_samples=4000,
+                  cifar10_classes=(3, 5), cifar10_max_samples=4000):
     datasets = {}
     if which in ('sklearn', 'all'):
         datasets.update(load_sklearn_datasets())
     if which in ('fashion', 'all'):
         name, X, y = load_fashion_dataset(classes=fashion_classes, max_samples=fashion_max_samples)
+        datasets[name] = (X, y)
+    if which == 'cifar10':
+        # deliberately NOT included in 'all' -- kept on its own figure, see
+        # module docstring (don't combine with fashion/sklearn on one chart)
+        name, X, y = load_cifar10_dataset(classes=cifar10_classes, max_samples=cifar10_max_samples)
         datasets[name] = (X, y)
     return datasets
 
@@ -254,14 +316,21 @@ def parse_args():
     parser.add_argument('--batch-size', type=int, default=None,
                         help='forward-selection batch size b (default: adaptive, ~m/10; '
                              'use 1 for a faithful one-by-one reproduction of Figure 6)')
-    parser.add_argument('--dataset', choices=['sklearn', 'fashion', 'all'], default='sklearn',
+    parser.add_argument('--dataset', choices=['sklearn', 'fashion', 'cifar10', 'all'], default='sklearn',
                         help='"sklearn" (default, offline, breast_cancer+digits), '
                              '"fashion" (real FashionMNIST, needs torchvision+internet), '
-                             '"all" (both)')
+                             '"cifar10" (real CIFAR-10, needs torchvision+internet -- run as a '
+                             'separate invocation from "fashion", not combined; see module docstring), '
+                             '"all" (sklearn + fashion only, on one combined figure -- cifar10 is '
+                             'never included in "all")')
     parser.add_argument('--fashion-classes', default='2,6',
                         help='the two FashionMNIST class indices to use (default: 2,6 = Pullover vs Shirt)')
     parser.add_argument('--fashion-max-samples', type=int, default=4000,
                         help='cap on the number of FashionMNIST points used (subsampled if larger)')
+    parser.add_argument('--cifar10-classes', default='3,5',
+                        help='the two CIFAR-10 class indices to use (default: 3,5 = Cat vs Dog)')
+    parser.add_argument('--cifar10-max-samples', type=int, default=4000,
+                        help='cap on the number of CIFAR-10 points used (subsampled if larger)')
     return parser.parse_args()
 
 
@@ -269,13 +338,17 @@ def main():
     args = parse_args()
     sizes = [int(s) for s in args.sizes.split(',')]
     fashion_classes = tuple(int(c) for c in args.fashion_classes.split(','))
+    cifar10_classes = tuple(int(c) for c in args.cifar10_classes.split(','))
 
     import os
+    default_name = 'logistic_regression_coreset_accuracy_{}.png'.format(args.dataset)
     output_path = args.output or os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), 'logistic_regression_coreset_accuracy.png')
+        os.path.dirname(os.path.abspath(__file__)), default_name)
 
     datasets = load_datasets(which=args.dataset, fashion_classes=fashion_classes,
-                             fashion_max_samples=args.fashion_max_samples)
+                             fashion_max_samples=args.fashion_max_samples,
+                             cifar10_classes=cifar10_classes,
+                             cifar10_max_samples=args.cifar10_max_samples)
     all_results = {}
     for name, (X, y) in datasets.items():
         accs, full_acc = run_dataset(name, X, y, sizes, args.seeds, args)

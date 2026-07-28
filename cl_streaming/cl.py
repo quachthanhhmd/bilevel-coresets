@@ -23,7 +23,15 @@ datasets = ['permmnist', 'splitmnist', 'splitfashionmnist']
 # JMLR paper); 'coreset_direct' builds it directly on the target model being trained
 # (bicoreset.direct.BilevelCoreset, Sec. 3.3/3.5.1) -- no proxy, but much slower since
 # it retrains the model at every forward-selection step.
-methods = ['uniform', 'coreset', 'coreset_direct',
+# 'coreset_nystrom': same Sec. 3.5.2 proxy idea as 'coreset', but using the paper's
+# actual Sec. 5.1 construction instead of a plain 2-layer NTK + full kernel matrix:
+# a 6-layer CNTK with global average pooling (bicoreset.cntk, same kernel used by
+# experiments/run_algorithm1_variants_paper_cifar10.py) projected to a low-rank
+# Nystrom feature space (bicoreset.nystrom), on which a logistic regression proxy
+# is fit via bicoreset.direct.BilevelCoreset (forward selection, b=1). Kept as a
+# separate method (not a replacement for 'coreset') so both remain comparable
+# baselines in Table 3.
+methods = ['uniform', 'coreset', 'coreset_direct', 'coreset_nystrom',
            'kmeans_features', 'kcenter_features', 'kmeans_grads',
            'kmeans_embedding', 'kcenter_embedding', 'kcenter_grads',
            'entropy', 'hardest', 'frcl', 'icarl', 'grad_matching', 'forgetting',
@@ -37,6 +45,22 @@ def get_kernel_fn(dataset):
         return lambda x, y: ntk_generator.generate_fnn_ntk(x.reshape(-1, 28 * 28), y.reshape(-1, 28 * 28))
     else:
         return lambda x, y: ntk_generator.generate_cnn_ntk(x.reshape(-1, 28, 28, 1), y.reshape(-1, 28, 28, 1))
+
+
+def get_cntk_kernel_fn(dataset, batch_size=32):
+    """6-layer CNTK + global average pooling (Sec. 5.1's target feature space),
+    used by the 'coreset_nystrom' method. For permmnist the pixels are randomly
+    permuted per task, which destroys spatial locality -- a *convolutional*
+    kernel is not meaningful there, so this falls back to the plain FNN NTK
+    (the same one 'coreset' already uses for permmnist) instead.
+    """
+    import jax_patch  # noqa: F401  (hot-patches jax; must be imported before neural_tangents)
+    if dataset == 'permmnist':
+        from cl_streaming import ntk_generator
+        return lambda x, y: ntk_generator.generate_fnn_ntk(x.reshape(-1, 28 * 28), y.reshape(-1, 28 * 28))
+    from bicoreset.cntk import build_cntk6_gap_kernel_fn
+    cntk = build_cntk6_gap_kernel_fn(batch_size=batch_size)
+    return lambda x, y: cntk(x.reshape(-1, 28, 28, 1), y.reshape(-1, 28, 28, 1))
 
 
 def continual_learning(args):
@@ -81,6 +105,10 @@ def continual_learning(args):
     training_op = training.Training(model, device, nr_epochs, beta=beta)
     # computed lazily on first use inside the loop -- only method == 'coreset' needs it
     kernel_fn = get_kernel_fn(dataset) if method == 'coreset' else None
+    # only method == 'coreset_nystrom' needs the CNTK kernel; built once and reused
+    # across tasks (the kernel weights don't depend on the task's data)
+    cntk_kernel_fn = get_cntk_kernel_fn(dataset, batch_size=args.kernel_batch_size) \
+        if method == 'coreset_nystrom' else None
 
     bc = bilevel_coreset.BilevelCoreset(outer_loss_fn=loss_utils.cross_entropy,
                                         inner_loss_fn=loss_utils.cross_entropy, out_dim=10, max_outer_it=1,
@@ -131,6 +159,29 @@ def continual_learning(args):
                 torch.from_numpy(X).float(), torch.from_numpy(y).long(), size_per_task,
                 strategy='forward', selection_batch_size=selection_batch,
                 start_size=min(selection_batch, size_per_task))
+        elif method == 'coreset_nystrom':
+            from bicoreset.nystrom import NystromFeatureMap, sample_landmarks
+            # q << task pool size (unlike the paper's q=2048 on a ~50000-image train
+            # partition) -- each task here only has `samples_per_task` points, so the
+            # Nystrom landmark count is capped well below that for a real low-rank
+            # approximation rather than degenerating into (near) the full kernel.
+            q = min(args.nystrom_dim, len(X) - 1)
+            landmarks, _ = sample_landmarks(X, q, seed=args.seed * 1000 + i)
+            phi = NystromFeatureMap(landmarks, cntk_kernel_fn, batch_size=args.kernel_batch_size)
+            Phi = phi(X)
+            nystrom_bc = DirectBilevelCoreset(
+                model_fn=lambda: torch.nn.Linear(q, nr_classes),
+                loss_fn=bico_losses.cross_entropy,
+                inner_reg=inner_reg,
+                ihvp='cg', ihvp_kwargs={'max_iter': 50},
+                inner_lr=0.01,
+                max_inner_it=200,
+                max_outer_it=0,          # binary coreset, Sec. 3.5.1
+                candidate_pool_size=None,
+                retrain_from_scratch=False,
+                device=device, verbose=False)
+            chosen_inds, _ = nystrom_bc.build(Phi, y, size_per_task, strategy='forward',
+                                              selection_batch_size=1, start_size=1)
         else:
             summarizer = summary.Summarizer.factory(method, rs)
             chosen_inds = summarizer.build_summary(X, y, size_per_task, method=method, model=model, device=device)
@@ -172,6 +223,13 @@ if __name__ == '__main__':
     parser.add_argument('--buffer_size', default=100, type=int)
     parser.add_argument('--batch_size', default=256, type=int)
     parser.add_argument('--num_workers', default=0, type=int)
+    parser.add_argument('--nystrom_dim', default=256, type=int,
+                        help='q, number of Nystrom landmarks for method=coreset_nystrom '
+                             '(default 256, well below the paper\'s q=2048 since each task '
+                             'pool here only has --samples_per_task points, not ~50000)')
+    parser.add_argument('--kernel_batch_size', default=32, type=int,
+                        help='X/Y chunk size per CNTK kernel_fn call for method=coreset_nystrom '
+                             '(memory/latency tradeoff, see bicoreset/cntk.py)')
     args = parser.parse_args()
     print(args)
     seed = args.seed
