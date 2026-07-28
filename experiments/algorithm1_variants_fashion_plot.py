@@ -25,6 +25,7 @@ import numpy as np
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+import matplotlib.ticker
 import seaborn as sns
 
 METHODS = {
@@ -114,6 +115,13 @@ def main():
                   linewidth=1.4, label='Full Dataset')
 
     ax.set_xscale('log')
+    # matplotlib's default log-scale locator only labels "round" powers of 10
+    # that fall in the data range (here just 10^2=100), so points at 50/200/
+    # 400/800 were plotted correctly but left unlabeled. Force a tick at every
+    # size actually used, in plain (non-scientific) notation.
+    ax.set_xticks(sizes)
+    ax.get_xaxis().set_major_formatter(matplotlib.ticker.ScalarFormatter())
+    ax.get_xaxis().set_minor_formatter(matplotlib.ticker.NullFormatter())
     ax.set_xlabel('Coreset size (number of images)')
     ax.set_ylabel('Test Accuracy (%)')
     ax.set_title('Practical variants of Algorithm 1 on FashionMNIST')

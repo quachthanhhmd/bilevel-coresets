@@ -82,7 +82,17 @@ class BilevelCoreset(object):
         optimizer_fn (callable): ``optimizer_fn(params) -> torch.optim.Optimizer``
             used for the inner problem.  Defaults to Adam with ``inner_lr``.
         inner_lr (float): learning rate of the default inner optimizer.
-        max_inner_it (int): number of gradient steps for the inner problem.
+        max_inner_it (int): number of gradient steps for the inner problem,
+            used for every inner solve except possibly the first (see
+            ``first_inner_it``).
+        first_inner_it (int): number of gradient steps for the *first* inner
+            solve only (when warm-starting, i.e. ``retrain_from_scratch=False``).
+            Defaults to ``max_inner_it`` if not given. Matches Appendix C's
+            asymmetric warm-start schedule for Sec. 3.5 ("all variants start
+            with an optimization phase on the initial point set with 5e4
+            iterations; then, after each step, an additional 1e4 GD iterations
+            are performed") -- pass ``first_inner_it=50_000, max_inner_it=10_000``
+            to reproduce it exactly.
         inner_batch_size (int): if set, the inner problem is solved with
             minibatch SGD of this size instead of full-batch gradient descent.
         train_fn (callable): optional full override of the inner solver, with
@@ -122,6 +132,7 @@ class BilevelCoreset(object):
                  optimizer_fn=None,
                  inner_lr=1e-3,
                  max_inner_it=200,
+                 first_inner_it=None,
                  inner_batch_size=None,
                  train_fn=None,
                  max_outer_it=0,
@@ -144,6 +155,7 @@ class BilevelCoreset(object):
         self.optimizer_fn = optimizer_fn
         self.inner_lr = inner_lr
         self.max_inner_it = max_inner_it
+        self.first_inner_it = first_inner_it if first_inner_it is not None else max_inner_it
         self.inner_batch_size = inner_batch_size
         self.train_fn = train_fn
         self.max_outer_it = max_outer_it
@@ -277,11 +289,17 @@ class BilevelCoreset(object):
 
     def _fit(self, X, y, inds, weights, model=None):
         """Instantiate (or reuse) the model and solve the inner problem on ``inds``."""
-        if model is None or self.retrain_from_scratch:
+        is_first_fit = model is None
+        if is_first_fit or self.retrain_from_scratch:
             model = self._new_model()
         X_s = self._index(X, inds)
         y_s = self._index(y, inds)
-        self._solve_inner(model, X_s, y_s, weights)
+        # Warm-starting (retrain_from_scratch=False): the very first solve gets
+        # first_inner_it steps, every subsequent one gets max_inner_it (Appendix
+        # C's asymmetric 5e4-then-1e4 schedule). Retraining from scratch every
+        # time makes the distinction moot, so always use max_inner_it there.
+        n_steps = self.first_inner_it if (is_first_fit and not self.retrain_from_scratch) else self.max_inner_it
+        self._solve_inner(model, X_s, y_s, weights, n_steps=n_steps)
         return model
 
     # ------------------------------------------------------------------

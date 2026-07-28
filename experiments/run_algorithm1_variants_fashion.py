@@ -110,17 +110,27 @@ def evaluate(model, dataset, device='cpu', batch_size=512):
 
 
 def fwd_builder(args, device):
+    # retrain_from_scratch is now a single shared flag (see --retrain-from-scratch)
+    # instead of being hardcoded True here while reg_builder had its own separate
+    # flag defaulting to False -- that split was inconsistent and didn't track any
+    # real distinction the paper makes. Appendix C ("Variants") warm-starts *every*
+    # Sec. 3.5 variant (5e4 initial Adam steps, then 1e4 more per selection step);
+    # the paper only retrains from scratch for the Sec. 5.2.3 deep-net experiments
+    # (WideResNet with a cosine-annealed LR schedule, Sec. 5.7). Our ConvNet with a
+    # fixed Adam lr is arguably closer to the "Variants" setting, so we default to
+    # warm-starting like the paper -- pass --retrain-from-scratch to switch to the
+    # Sec. 5.2.3-style behavior if warm-starting looks unstable for a given method.
     return BilevelCoreset(
         model_fn=lambda: models.ConvNet(output_dim=10),
         loss_fn=losses.cross_entropy,
-        inner_reg=1e-4,
+        inner_reg=args.inner_reg,
         ihvp='neumann', ihvp_kwargs={'num_terms': 50, 'alpha': 0.01, 'damping': 1e-3},
         max_inner_it=args.max_inner_it, inner_lr=5e-4,
         max_outer_it=0,  # binary weights, Sec. 3.5.1
         candidate_pool_size=args.candidate_per_step,
         outer_batch_size=256,
         hessian_batch_size=64,  # stochastic Hessian, Sec. 5.2.3
-        retrain_from_scratch=True,
+        retrain_from_scratch=args.retrain_from_scratch,
         device=device, verbose=args.verbose, logging_period=5)
 
 
@@ -131,20 +141,31 @@ def reg_builder(args, device):
     # a large one. With a small, fixed --reg-outer-it budget the small-size runs
     # can hit max_outer_it before beta/the support have actually converged and
     # fall back to "keep the heaviest points" truncation (regularized.py L271-275),
-    # which produces a poorly-optimized (noisy) coreset -- the likely cause of the
-    # BiCo Reg curve dipping non-monotonically. Raise --reg-outer-it and
-    # --reg-warm-inner-it first if you see that; run more --seeds to see whether
-    # the dip is a real trend or just single-run ConvNet training noise.
+    # which produces a poorly-optimized (noisy) coreset.
+    #
+    # Note this is *not* purely an artifact of our ConvNet reproduction: the paper
+    # itself reports non-monotonic BiCo Reg behavior in Fig. 3 ("the higher test
+    # performance for the weighted coreset with size 20% compared to 90% is due to
+    # the higher number of total outer gradient steps performed"), i.e. Sec. 5.1
+    # also runs Algorithm 2 under a fixed *total* outer-step budget rather than a
+    # fixed per-size --reg-outer-it. The paper does not report a specific outer
+    # iteration count for BiCo Reg in Sec. 5.1 (the "150 outer iterations" figure
+    # in Appendix C is for the *binary* logistic regression experiment of Sec.
+    # 5.2.2, and the "200" figures in Sec. 5.1's text are BiCo Elim's batch size /
+    # BiCo Exch's step count, not this). Our default below is just a starting
+    # point for a real ConvNet -- raise --reg-outer-it / --reg-warm-inner-it if
+    # the curve looks noisy, and run more --seeds to separate a real trend from
+    # single-run ConvNet training noise.
     return RegularizedBilevelCoreset(
         model_fn=lambda: models.ConvNet(output_dim=10),
         loss_fn=losses.cross_entropy,
-        inner_reg=1e-4,
+        inner_reg=args.inner_reg,
         beta=args.reg_beta, adaptive_beta=True, patience=args.reg_patience,
         max_outer_it=args.reg_outer_it,
         outer_lr=0.05,
         max_inner_it=args.max_inner_it, warm_inner_it=args.reg_warm_inner_it,
         ihvp='neumann', ihvp_kwargs={'num_terms': 50, 'alpha': 0.01, 'damping': 1e-3},
-        retrain_from_scratch=args.reg_retrain_from_scratch,
+        retrain_from_scratch=args.retrain_from_scratch,
         device=device, logging_period=10_000, verbose=args.verbose)
 
 
@@ -270,7 +291,12 @@ def parse_args():
     parser.add_argument('--size', type=int, default=None, help='coreset size (required unless --method full)')
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--candidate-pool', type=int, default=2000,
-                        help='number of training images the selection algorithms get to see')
+                        help='number of training images the selection algorithms get to see. Sec. 5.1 has '
+                             'no analogous subsampling -- it scores implicit gradients over the *entire* '
+                             'remaining CIFAR-10 training set (cheap: 2048-d Nystrom features + logistic '
+                             'regression). The closest paper number is the pool of 2500 in Sec. 5.2.3\'s '
+                             'WideResNet experiments, a different (real deep-net) setting; this default '
+                             'is a practical choice for ConvNet+FashionMNIST tractability, not a Sec. 5.1 value')
     parser.add_argument('--candidate-per-step', type=int, default=300,
                         help='candidates scored per forward-selection step (bicoreset.direct candidate_pool_size)')
     parser.add_argument('--fwd-b-batch', type=int, default=10, help='batch size for "bico_fwd_b"')
@@ -280,18 +306,30 @@ def parse_args():
     parser.add_argument('--reg-outer-it', type=int, default=150,
                         help='outer iterations for "bico_reg" (Algorithm 2); raise this first if the '
                              'BiCo Reg curve looks noisy/non-monotonic -- small target sizes need many '
-                             'more beta-doublings to converge within the budget than large ones (paper: 200)')
+                             'more beta-doublings to converge within the budget than large ones. The '
+                             'paper does not report a fixed per-size outer-iteration count for BiCo Reg '
+                             'in Sec. 5.1 -- it uses a fixed *total* outer-step budget instead (this is '
+                             'also why the paper\'s own Fig. 3 is non-monotonic between the 20%% and 90%% '
+                             'points); 150 here is just a practical starting default, not a paper value')
     parser.add_argument('--reg-warm-inner-it', type=int, default=30,
                         help='inner GD steps to re-fit the ConvNet after each weight update in "bico_reg" '
                              '(raise this together with --reg-outer-it if the curve is noisy)')
     parser.add_argument('--reg-patience', type=int, default=3,
                         help='plateau length (in outer iterations) before beta is doubled in "bico_reg"')
-    parser.add_argument('--reg-beta', type=float, default=1e-6,
-                        help='initial sparsity penalty for "bico_reg" (paper starts at 1e-7)')
-    parser.add_argument('--reg-retrain-from-scratch', action='store_true',
-                        help='fully retrain the ConvNet from scratch after every "bico_reg" weight update '
-                             'instead of warm-starting (much slower, but removes warm-start staleness -- '
-                             'try this if raising --reg-outer-it/--reg-warm-inner-it is not enough)')
+    parser.add_argument('--reg-beta', type=float, default=1e-7,
+                        help='initial sparsity penalty for "bico_reg" (paper: 1e-7, Appendix C)')
+    parser.add_argument('--inner-reg', type=float, default=1e-7,
+                        help='lambda of the inner ridge penalty, Eq. (8) (paper: 1e-7, Appendix C, for '
+                             'all Sec. 3.5 variants). The paper derives this under a convex inner problem; '
+                             'a ConvNet is non-convex, so this may need retuning -- raise it if inner '
+                             'optimization looks unstable')
+    parser.add_argument('--retrain-from-scratch', action='store_true',
+                        help='fully retrain the ConvNet from scratch after every selection/weight-update '
+                             'step, for *all* methods (bico_fwd/fwd_b/elim/exch/reg), instead of '
+                             'warm-starting. Paper\'s Appendix C ("Variants") warm-starts every Sec. 3.5 '
+                             'method by default; retraining from scratch is only used for the Sec. 5.2.3 '
+                             'deep-net experiments (WideResNet with a cosine-annealed LR schedule). Try '
+                             'this if warm-starting looks unstable for a given method on the real ConvNet')
     parser.add_argument('--max-inner-it', type=int, default=300,
                         help='inner GD steps to fit the ConvNet on the current support')
     parser.add_argument('--train-epochs', type=int, default=1000,

@@ -46,6 +46,7 @@ METHODS = {
     "iCaRL": "icarl",
     "Sensitivity Coreset": "sensitivity",
     "GLISTER": "glister",
+    "Forgetting": "forgetting",
     "Coreset (Bilevel)": "coreset",
 }
 COLORS = {
@@ -63,6 +64,7 @@ COLORS = {
     "iCaRL": "#c785e0",
     "Sensitivity Coreset": "#4a3aa7",
     "GLISTER": "#e34948",
+    "Forgetting": "#a52a2a",
     "Coreset (Bilevel)": "#008300",
 }
 MARKERS = {
@@ -80,13 +82,14 @@ MARKERS = {
     "iCaRL": "H",
     "Sensitivity Coreset": "^",
     "GLISTER": "s",
+    "Forgetting": "x",
     "Coreset (Bilevel)": "D",
 }
 
 # Illustrative fallback numbers, only for the 5 methods this repo originally shipped
 # with -- the newer Table-3 methods (kcenter_*, kmeans_embedding/grads, grad_matching,
-# entropy, hardest, frcl, icarl) have no established reference numbers, so they are
-# skipped (not fabricated) until real result files exist; see load_results().
+# entropy, hardest, frcl, icarl, forgetting) have no established reference numbers, so
+# they are skipped (not fabricated) until real result files exist; see load_results().
 FALLBACK = {
     "Uniform": {"test_acc": 74.46, "execution_time": 80, "forgetting": 18.5},
     "KMeans (features)": {"test_acc": 74.90, "execution_time": 82, "forgetting": 16.5},
