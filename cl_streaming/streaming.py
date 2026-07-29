@@ -10,13 +10,17 @@ import models
 import bilevel_coreset
 from cl_streaming import datagen
 from cl_streaming import training
-from cl_streaming import ntk_generator
+# jax_patch/ntk_generator are only needed by method == 'coreset' (the NTK-proxy
+# construction); imported lazily below so 'reservoir'/'cbrs' run on a plain
+# torch install, without jax/neural-tangents (same fix already applied to cl.py).
 
-datasets = ['permmnist', 'splitmnist', 'splitmnistimbalanced']
+datasets = ['permmnist', 'splitmnist', 'splitmnistimbalanced', 'splitfashionmnist', 'splitfashionmnistimbalanced']
 methods = ['reservoir', 'cbrs', 'coreset']
 
 
 def get_kernel_fn(dataset):
+    import jax_patch  # noqa: F401  (hot-patches jax; must be imported before neural_tangents)
+    from cl_streaming import ntk_generator
     if dataset == 'permmnist':
         return lambda x, y: ntk_generator.generate_fnn_ntk(x.reshape(-1, 28 * 28), y.reshape(-1, 28 * 28))
     else:
@@ -178,6 +182,11 @@ def streaming(args):
     elif dataset == 'splitmnistimbalanced':
         inner_reg = 1e-4
         generator = datagen.SplitMnistImbalancedGenerator()
+    elif dataset == 'splitfashionmnist':
+        generator = datagen.SplitFashionMnistGenerator(samples_per_task)
+    elif dataset == 'splitfashionmnistimbalanced':
+        inner_reg = 1e-4
+        generator = datagen.SplitFashionMnistImbalancedGenerator()
 
     tasks = []
     train_loaders = []
@@ -199,7 +208,8 @@ def streaming(args):
     else:
         model = models.ConvNet(nr_classes).to(device)
     training_op = training.Training(model, device, nr_epochs, beta=beta)
-    kernel_fn = get_kernel_fn(dataset)
+    # computed lazily -- only method == 'coreset' needs the NTK proxy (and hence jax)
+    kernel_fn = get_kernel_fn(dataset) if method == 'coreset' else None
 
     bc = bilevel_coreset.BilevelCoreset(outer_loss_fn=loss_utils.cross_entropy,
                                         inner_loss_fn=loss_utils.cross_entropy, out_dim=10, max_outer_it=1,

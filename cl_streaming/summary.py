@@ -1,3 +1,4 @@
+import copy
 import numpy as np
 from abc import ABC, abstractmethod
 import torch
@@ -29,6 +30,9 @@ class Summarizer(ABC):
         if type == 'frcl': return FRCLSelection(rs)
         if type == 'icarl': return ICaRLSelection(rs)
         if type == 'grad_matching': return GradMatching(rs)
+        if type == 'sensitivity': return SensitivitySampling(rs)
+        if type == 'glister': return GlisterSelection(rs)
+        if type == 'forgetting': return ForgettingSelection(rs)
         raise TypeError('Unkown summarizer type ' + type)
 
     factory = staticmethod(factory)
@@ -270,3 +274,138 @@ class GradMatching(KmeansGradSpace):
         inds = np.array(inds)
 
         return inds
+
+
+class SensitivitySampling(KmeansFeatureSpace):
+    """Sensitivity-based coreset sampling (Bachem et al., "Practical Coreset
+    Constructions for Machine Learning", 2018; Feldman & Langberg, 2011).
+
+    A k-means solution is fit on the raw features, and each point's sensitivity is
+    upper-bounded by its (normalized) distance to its assigned center plus a uniform
+    term across its cluster. Points are then drawn via importance sampling proportional
+    to this sensitivity, which is the standard reduction from sensitivity scores to a
+    coreset used in the sensitivity-sampling literature.
+    """
+
+    def build_summary(self, X, y, size, **kwargs):
+        X_flattened = X.reshape((X.shape[0], -1)).astype(np.float64)
+        n = X_flattened.shape[0]
+        k = max(1, min(size, n))
+
+        center_inds = self.kmeans_pp(X_flattened, k, self.rs)
+        centers = X_flattened[center_inds]
+
+        dists_sq = np.sum((X_flattened[:, np.newaxis, :] - centers[np.newaxis, :, :]) ** 2, axis=2)
+        assignment = np.argmin(dists_sq, axis=1)
+        min_dists_sq = dists_sq[np.arange(n), assignment]
+
+        cluster_count = np.bincount(assignment, minlength=k).astype(np.float64)
+        total_cost = np.sum(min_dists_sq) + 1e-12
+
+        sensitivity = min_dists_sq / total_cost + 1.0 / (cluster_count[assignment] + 1e-12)
+        probs = sensitivity / np.sum(sensitivity)
+
+        inds = self.rs.choice(n, size, replace=False, p=probs)
+        return inds
+
+
+class GlisterSelection(KmeansGradSpace):
+    """Simplified GLISTER-style subset selection (Killamsetty et al.,
+    "GLISTER: Generalization based Data Subset Selection for Efficient and Robust
+    Learning", AAAI 2021).
+
+    GLISTER picks the subset that maximizes a first-order (Taylor) approximation of the
+    validation log-likelihood gain from a gradient-descent step on that subset. We
+    approximate this with the standard naive-greedy relaxation: a held-out validation
+    split is carved out of the task's own data, and points are ranked by the dot product
+    of their per-example gradient with the validation-set gradient, i.e. how much each
+    point's update direction would reduce the validation loss.
+    """
+
+    def build_summary(self, X, y, size, **kwargs):
+        model = kwargs['model']
+        device = kwargs['device']
+        n = X.shape[0]
+        val_size = max(1, min(n - size, int(0.2 * n)))
+        perm = self.rs.permutation(n)
+        val_inds, pool_inds = perm[:val_size], perm[val_size:]
+
+        grads = self.get_grads(X, y, model, device)
+        val_grad = np.mean(grads[val_inds], axis=0)
+
+        scores = grads[pool_inds].dot(val_grad)
+        order = np.argsort(scores)[::-1][:size]
+        inds = pool_inds[order]
+        return inds
+
+
+class ForgettingSelection(Summarizer):
+    """"Forgetting events" selection (Toneva et al., "An Empirical Study of Example
+    Forgetting during Deep Neural Network Learning", ICLR 2019).
+
+    A forgetting event is a transition from being classified correctly to incorrectly
+    at two consecutive training checkpoints; examples that are forgotten often (or
+    never learned correctly in the first place) sit near the decision boundary and
+    are the most informative to keep. Referenced repeatedly in the JMLR paper as a
+    strong baseline (Sec. 5.2.2, 5.2.3, Table 1) but not previously implemented here.
+
+    Unlike the other summarizers, forgetting events can only be observed over a
+    training trajectory, not read off a single already-converged snapshot -- and the
+    `model` passed in by cl.py has already finished training on the current task by
+    the time build_summary() is called. So this reinitializes a fresh copy of the
+    same architecture (via `reset_parameters()` on every submodule that has one --
+    true for the `nn.Linear`/`nn.Conv2d` layers used by every model in this repo) and
+    trains it from scratch for `forgetting_epochs` short epochs on (X, y), which is
+    enough for forgetting statistics to emerge without paying for the full training
+    schedule used elsewhere in the paper's own experiments.
+    """
+
+    def build_summary(self, X, y, size, **kwargs):
+        model = kwargs['model']
+        device = kwargs['device']
+        n_epochs = kwargs.get('forgetting_epochs', 20)
+        lr = kwargs.get('forgetting_lr', 1e-3)
+        batch_size = kwargs.get('forgetting_batch_size', 128)
+
+        net = copy.deepcopy(model).to(device)
+        for module in net.modules():
+            if hasattr(module, 'reset_parameters'):
+                module.reset_parameters()
+
+        X_t = torch.from_numpy(X).float().to(device)
+        y_t = torch.from_numpy(y).long().to(device)
+        n = X_t.shape[0]
+        bs = min(batch_size, n)
+
+        optimizer = torch.optim.Adam(net.parameters(), lr=lr)
+        was_correct = np.zeros(n, dtype=bool)
+        ever_correct = np.zeros(n, dtype=bool)
+        forget_counts = np.zeros(n, dtype=np.int64)
+
+        for _ in range(n_epochs):
+            perm = self.rs.permutation(n)
+            net.train()
+            for start in range(0, n, bs):
+                idx = perm[start:start + bs]
+                optimizer.zero_grad()
+                loss = F.cross_entropy(net(X_t[idx]), y_t[idx])
+                loss.backward()
+                optimizer.step()
+
+            net.eval()
+            with torch.no_grad():
+                preds = net(X_t).argmax(dim=1).cpu().numpy()
+            now_correct = (preds == y)
+            forget_counts += (was_correct & ~now_correct).astype(np.int64)
+            ever_correct |= now_correct
+            was_correct = now_correct
+
+        # examples never classified correctly are treated as maximally
+        # "forgettable" (Toneva et al.'s convention for unlearned examples)
+        score = forget_counts.astype(np.float64)
+        score[~ever_correct] = np.inf
+        # random tie-break so ties (e.g. many zero-forgetting examples) don't
+        # get selected in a biased (e.g. index) order
+        tie_break = self.rs.uniform(0, 1e-6, size=n)
+        order = np.argsort(-(score + tie_break))
+        return order[:size]

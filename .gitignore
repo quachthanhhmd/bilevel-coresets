@@ -3,3 +3,6 @@
 /data/
 /cl_streaming/data/
 /data_summarization/results
+__pycache__/
+.pytest_cache/
+*.pyc
