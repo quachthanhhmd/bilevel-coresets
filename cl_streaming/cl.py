@@ -227,9 +227,10 @@ if __name__ == '__main__':
                         help='q, number of Nystrom landmarks for method=coreset_nystrom '
                              '(default 256, well below the paper\'s q=2048 since each task '
                              'pool here only has --samples_per_task points, not ~50000)')
-    parser.add_argument('--kernel_batch_size', default=32, type=int,
+    parser.add_argument('--kernel_batch_size', default=4, type=int,
                         help='X/Y chunk size per CNTK kernel_fn call for method=coreset_nystrom '
-                             '(memory/latency tradeoff, see bicoreset/cntk.py)')
+                             '(without diagonal_spatial, full spatial covariance needs '
+                             'batch_size=4 to fit on T4 16GB; see bicoreset/cntk.py)')
     args = parser.parse_args()
     print(args)
     seed = args.seed

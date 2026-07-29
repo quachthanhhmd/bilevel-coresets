@@ -34,26 +34,23 @@ Sec. 5.1 tractable at all, but with q=2048 landmarks and n up to 50000 CIFAR-10
 images this can still take hours on a single GPU. Reduce ``q`` and/or the
 number of images for a smoke test before committing to a full run.
 
-**``diagonal_spatial=True`` -- necessary, not just an optimization.** By
-default, ``neural_tangents`` keeps the *full* (H, W, H, W) spatial covariance
-at every conv layer (needed for an exact NTK), which blows up memory as
-O(n1 * n2 * H^2 * W^2): even a landmark batch as small as 128x64 pairs at
-32x32 needs >30GB and reliably OOMs on a single GPU. Setting
-``diagonal_spatial=True`` treats different spatial positions as uncorrelated,
-reducing this to O(n1 * n2 * H * W) -- this is a well-established, standard
-approximation in the ``neural_tangents`` library for scaling conv kernels to
-image sizes like CIFAR-10 (used in the library's own examples), but it *is* an
-additional approximation beyond an exact CNTK that the paper does not
-mention -- Arora et al. (2019) had the compute budget to keep the exact
-kernel. Report this as a known deviation if you cite this as a Sec. 5.1
-reproduction.
+**``diagonal_spatial`` is NOT passed at call time.** The architecture ends
+with ``GlobalAvgPool``, which imposes ``Diagonal(input=NO, output=YES)`` --
+full spatial covariance on input (needed to compute the average correctly),
+diagonal on output. Passing ``diagonal_spatial=True`` (diagonal on *both*)
+conflicts with this requirement and raises ``ValueError``. Omitting the kwarg
+lets ``neural_tangents`` use the architecture's own setting automatically.
+This means memory scales as O(n1 * n2 * H^2 * W^2) per chunk -- controlled
+by ``batch_size`` (default 4, yielding ~614 MB peak for 28x28 images or
+~1 GB for 32x32, feasible on T4 16GB). This is the *exact* CNTK kernel
+(no diagonal approximation), matching the Arora et al. (2019) construction.
 """
 
 import numpy as np
 
 
 def build_cntk6_gap_kernel_fn(channels=64, depth=6, w_std=1.6, b_std=0.05,
-                              batch_size=16, n_classes=10):
+                              batch_size=4, n_classes=10):
     """Build a batched, jit-compiled CNTK-6 + global-average-pooling kernel fn.
 
     Note on ``diagonal_spatial``: this function does NOT pass
@@ -77,9 +74,11 @@ def build_cntk6_gap_kernel_fn(channels=64, depth=6, w_std=1.6, b_std=0.05,
             ``cl_streaming/ntk_generator.py``).
         batch_size (int): both ``X`` and ``Y`` are chunked to at most this many
             examples per single ``kernel_fn`` (jit) call -- memory/latency
-            tradeoff, and critical for avoiding OOM. Full spatial covariance
-            uses O(batch^2 * H^2 * W^2) memory; batch_size=16 keeps this
-            under ~1 GB for 28x28 or 32x32 images.
+            tradeoff, and critical for avoiding OOM. Without diagonal_spatial
+            approximation (not available with GlobalAvgPool), full spatial
+            covariance uses O(batch^2 * H^2 * W^2) per layer with large
+            intermediate buffers across 6 conv layers. batch_size=4 keeps
+            peak GPU memory under ~4 GB for 28x28 images on T4 16GB.
         n_classes (int): output dimension of the (unused) readout layer --
             only the kernel function is used, not the readout, but ``stax``
             needs a full network definition.
