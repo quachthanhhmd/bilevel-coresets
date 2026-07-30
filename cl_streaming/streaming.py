@@ -183,10 +183,10 @@ def streaming(args):
         inner_reg = 1e-4
         generator = datagen.SplitMnistImbalancedGenerator()
     elif dataset == 'splitfashionmnist':
-        generator = datagen.SplitFashionMnistGenerator(samples_per_task)
+        generator = datagen.SplitFashionMnistGenerator(samples_per_task, data_root=args.fashion_data_root)
     elif dataset == 'splitfashionmnistimbalanced':
         inner_reg = 1e-4
-        generator = datagen.SplitFashionMnistImbalancedGenerator()
+        generator = datagen.SplitFashionMnistImbalancedGenerator(data_root=args.fashion_data_root)
 
     tasks = []
     train_loaders = []
@@ -253,6 +253,12 @@ if __name__ == '__main__':
     parser.add_argument('--nr_slots', default=10, type=int)
     parser.add_argument('--num_workers', default=0, type=int)
     parser.add_argument('--batch_size', default=256, type=int)
+    parser.add_argument('--fashion_data_root', default='data/FashionMNIST',
+                        help='torchvision root for FashionMNIST (splitfashionmnist / '
+                             'splitfashionmnistimbalanced only) -- torchvision looks for '
+                             '<this>/FashionMNIST/raw/. Point this at a pre-downloaded '
+                             'Kaggle Dataset to skip re-downloading every session, e.g. '
+                             '/kaggle/input/<your-dataset-slug>.')
     args = parser.parse_args()
     print(args)
     seed = args.seed

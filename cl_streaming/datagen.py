@@ -108,12 +108,18 @@ class PermutedMnistGenerator(DataGenerator):
 
 
 class SplitFashionMnistGenerator(DataGenerator):
-    def __init__(self, limit_per_task=1000):
+    def __init__(self, limit_per_task=1000, data_root='data/FashionMNIST'):
+        """``data_root`` is the torchvision ``root`` argument -- torchvision looks for
+        ``<data_root>/FashionMNIST/raw/...``. Override this to point at a pre-downloaded
+        copy (e.g. a read-only Kaggle Dataset mounted under /kaggle/input/...) instead of
+        re-downloading every session. ``download=True`` is harmless either way: torchvision
+        only attempts to fetch the files if they aren't already found at that path.
+        """
         super().__init__(limit_per_task)
 
-        train_dataset = datasets.FashionMNIST('data/FashionMNIST', train=True, transform=fashion_mnist_transforms(),
+        train_dataset = datasets.FashionMNIST(data_root, train=True, transform=fashion_mnist_transforms(),
                                        download=True)
-        test_dataset = datasets.FashionMNIST('data/FashionMNIST/', train=False, transform=fashion_mnist_transforms(),
+        test_dataset = datasets.FashionMNIST(data_root, train=False, transform=fashion_mnist_transforms(),
                                       download=True)
 
         train_loader = DataLoader(train_dataset, batch_size=len(train_dataset))
@@ -239,12 +245,13 @@ class SplitFashionMnistImbalancedGenerator(DataGenerator):
     underrepresents the early tasks in the replay buffer.
     """
 
-    def __init__(self):
+    def __init__(self, data_root='data/FashionMNIST'):
+        """See ``SplitFashionMnistGenerator`` docstring re: ``data_root``."""
         super().__init__()
 
-        train_dataset = datasets.FashionMNIST('data/FashionMNIST/', train=True, transform=fashion_mnist_transforms(),
+        train_dataset = datasets.FashionMNIST(data_root, train=True, transform=fashion_mnist_transforms(),
                                               download=True)
-        test_dataset = datasets.FashionMNIST('data/FashionMNIST/', train=False, transform=fashion_mnist_transforms(),
+        test_dataset = datasets.FashionMNIST(data_root, train=False, transform=fashion_mnist_transforms(),
                                              download=True)
 
         train_loader = DataLoader(train_dataset, batch_size=len(train_dataset))
