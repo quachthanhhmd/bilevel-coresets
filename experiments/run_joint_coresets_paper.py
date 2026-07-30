@@ -53,10 +53,13 @@ Run with::
 import argparse
 import csv
 import os
+import sys
 import time
 
 import numpy as np
 import torch
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import models
 from bicoreset import losses as bico_losses
