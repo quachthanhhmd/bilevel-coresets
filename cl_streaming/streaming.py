@@ -267,5 +267,13 @@ if __name__ == '__main__':
     torch.manual_seed(seed)
     np.random.seed(seed)
     rnd.seed(seed)
+    # Giảm nhiễu chạy-lại-khác-kết-quả trên GPU: nhiều phép toán CUDA mặc định không
+    # tất định (non-deterministic) dù đã set seed ở trên. 'coreset' đặc biệt nhạy với
+    # điều này vì mỗi bước chọn điểm dựa trên argsort() của implicit gradient -- sai số
+    # dấu phẩy động cực nhỏ cũng có thể đảo thứ hạng 2 điểm gần nhau, kéo theo cả chuỗi
+    # lựa chọn sau đó khác đi, làm accuracy cuối cùng dao động mạnh giữa các lần chạy
+    # "giống hệt nhau" (đã quan sát thấy dao động ~5 điểm % giữa 3 lần chạy cùng seed).
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
     streaming(args)
