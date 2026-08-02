@@ -18,9 +18,13 @@ subsection -- everything needed is in the main text):
   framework (Lucic et al., 2017)", and the bilevel coreset ("Our coreset
   construction outperforms other methods by an order of magnitude").
 
-This is a synthetic 2-D toy experiment -- the only truly "free" one of the
-five missing reproductions in terms of compute (a full run takes seconds on
-CPU), which is also why the paper reports it as a qualitative illustration
+This is a synthetic 2-D toy experiment -- the cheapest of the five missing
+reproductions in terms of compute, though not "seconds": a default full run
+(9 coreset sizes x 5 trials for Figure 5, 3 sizes for Figure 4) measures at
+roughly 7-8 minutes on CPU, dominated by the ``build()`` forward-selection
+calls at the larger sizes (~16s at m=100). Use ``--trials 1 --sizes
+20,50,100`` for a quick ~1-minute smoke test. This is also why the paper
+reports it as a qualitative illustration
 rather than a table.
 
 Deviations / choices not specified by the paper text:
@@ -40,10 +44,27 @@ Deviations / choices not specified by the paper text:
   GMMs (their sensitivity bound is itself derived from a bicriteria k-means
   clustering).
 
+Extension beyond the paper (``--dataset cifar10`` / ``fashionmnist`` / ``kmnist``):
+the paper only ever runs this experiment on synthetic 2-D data. As an extra,
+non-paper sanity check, ``--dataset`` can point this script at real images
+instead: a random subsample of ``--n`` images is flattened to pixel vectors
+and projected to 2-D with PCA, and the exact same GMM-coreset pipeline
+(fit/select/plot) is then applied to that PCA-2D point cloud. This is *not*
+a reproduction of Figure 4/5 -- it's a qualitative check of the same method
+on the local geometry of real image data instead of a hand-picked synthetic
+mixture. ``--dataset synthetic`` (the default) is unchanged and matches the
+paper exactly.
+
+For running this on multiple datasets in one shot with each dataset's chart
+kept separate, see ``experiments/run_gmm_multi_dataset.sh``.
+
 Run with::
 
     python experiments/run_gmm_paper.py
     python experiments/run_gmm_paper.py --sizes 20,30,40,50,60,70,80,90,100 --trials 5
+    python experiments/run_gmm_paper.py --dataset cifar10 --output-dir gmm_results_cifar10
+    python experiments/run_gmm_paper.py --dataset fashionmnist --output-dir gmm_results_fashionmnist
+    python experiments/run_gmm_paper.py --dataset kmnist --output-dir gmm_results_kmnist
 """
 
 import argparse
@@ -70,6 +91,39 @@ def synthetic_mixture(n=600, seed=0):
             np.array([[0.8, -0.3], [-0.3, 0.8]])]
     per = n // len(means)
     return np.concatenate([rs.multivariate_normal(m, c, per) for m, c in zip(means, covs)])
+
+
+# ----------------------------------------------------------------------
+# real-image data set, PCA-projected to 2-D (extension, not in the paper --
+# see module docstring)
+# ----------------------------------------------------------------------
+def load_image_pca_2d(name, n=600, data_root='data', seed=0, pca_dim=2):
+    """Random subsample of a real image data set, flattened to pixel vectors
+    and projected to ``pca_dim`` dimensions with PCA, so the rest of this
+    script (which assumes 2-D points -- ``plot_figure4``'s contour grid in
+    particular) runs unchanged. Not part of the paper; see module docstring."""
+    import torchvision.datasets as datasets
+    from sklearn.decomposition import PCA
+
+    if name == 'cifar10':
+        raw = datasets.CIFAR10(root=data_root, train=True, download=True)
+        imgs = raw.data.astype(np.float64) / 255.0  # (N, 32, 32, 3)
+    elif name == 'fashionmnist':
+        raw = datasets.FashionMNIST(root=data_root, train=True, download=True)
+        imgs = raw.data.numpy().astype(np.float64) / 255.0  # (N, 28, 28)
+    elif name == 'kmnist':
+        raw = datasets.KMNIST(root=data_root, train=True, download=True)
+        imgs = raw.data.numpy().astype(np.float64) / 255.0  # (N, 28, 28)
+    else:
+        raise ValueError('unknown --dataset "{}" (expected cifar10, fashionmnist or kmnist)'.format(name))
+
+    flat = imgs.reshape(len(imgs), -1)
+    rs = np.random.RandomState(seed)
+    n = min(n, len(flat))
+    idx = rs.choice(len(flat), size=n, replace=False)
+    flat = flat[idx]
+    X2 = PCA(n_components=pca_dim, random_state=seed).fit_transform(flat)
+    return X2
 
 
 # ----------------------------------------------------------------------
@@ -126,7 +180,7 @@ def run_figure5(X, k, sizes, trials, em_iters, em_restarts, cg_iters, damping, s
     return rows
 
 
-def plot_figure5(rows, out_path):
+def plot_figure5(rows, out_path, k=5, dataset='synthetic'):
     import matplotlib.pyplot as plt
     sizes = [r['size'] for r in rows]
     fig, ax = plt.subplots(figsize=(6, 4.5))
@@ -138,19 +192,25 @@ def plot_figure5(rows, out_path):
     ax.set_yscale('log')
     ax.set_xlabel('Subset Size')
     ax.set_ylabel('Relative Error for NLL')
-    ax.set_title('GMM coresets (k=5), relative NLL error')
+    # Trước đây title bị hardcode "k=5" bat ke gia tri --k thuc te la bao nhieu,
+    # va khong ghi ten dataset -- gay nham lan khi doc lai bieu do sau nay (vd
+    # nham GMM tren CIFAR-10 voi tai lap synthetic cua paper). Gio lay dong tu
+    # tham so thuc te.
+    ax.set_title('GMM coresets (k={}), relative NLL error -- {}'.format(k, dataset))
     ax.legend()
     fig.tight_layout()
     fig.savefig(out_path, dpi=150)
     print('saved {}'.format(out_path))
 
 
-def plot_figure4(X, k, sizes, em_iters, em_restarts, cg_iters, damping, start_size, seed, out_path):
+def plot_figure4(X, k, sizes, em_iters, em_restarts, cg_iters, damping, start_size, seed, out_path,
+                 dataset='synthetic'):
     import matplotlib.pyplot as plt
 
     full = WeightedGMM(k, seed=seed, n_init=em_restarts).fit(X)
 
     fig, axes = plt.subplots(1, len(sizes) + 1, figsize=(4 * (len(sizes) + 1), 4))
+    fig.suptitle('GMM coresets (k={}) -- {}'.format(k, dataset))
     xg = np.linspace(X[:, 0].min() - 2, X[:, 0].max() + 2, 150)
     yg = np.linspace(X[:, 1].min() - 2, X[:, 1].max() + 2, 150)
     XX, YY = np.meshgrid(xg, yg)
@@ -173,14 +233,21 @@ def plot_figure4(X, k, sizes, em_iters, em_restarts, cg_iters, damping, start_si
         sub = WeightedGMM(k, seed=seed, n_init=em_restarts).fit(X[inds])
         draw(ax, sub, 'Coreset size {}'.format(m), chosen=inds)
 
-    fig.tight_layout()
+    fig.tight_layout(rect=[0, 0, 1, 0.93])
     fig.savefig(out_path, dpi=150)
     print('saved {}'.format(out_path))
 
 
 def main():
     parser = argparse.ArgumentParser(description='Sec. 5.2.1 GMM coreset reproduction (Figures 4-5)')
-    parser.add_argument('--n', type=int, default=600, help='synthetic data set size')
+    parser.add_argument('--dataset', choices=['synthetic', 'cifar10', 'fashionmnist', 'kmnist'], default='synthetic',
+                        help='synthetic (default): paper Sec 5.2.1 2-D toy data, exact reproduction. '
+                             'cifar10/fashionmnist/kmnist: extension NOT in the paper -- random image '
+                             'subsample flattened + PCA-projected to 2-D, same pipeline applied to that '
+                             'point cloud.')
+    parser.add_argument('--data-root', default='data',
+                        help='torchvision download root, only used for --dataset cifar10/fashionmnist/kmnist')
+    parser.add_argument('--n', type=int, default=600, help='data set size (synthetic) / subsample size (real images)')
     parser.add_argument('--k', type=int, default=5, help='number of GMM components (paper: 5)')
     parser.add_argument('--sizes', default='20,30,40,50,60,70,80,90,100',
                         help='coreset sizes for Figure 5 (paper x-axis spans 20 to 100)')
@@ -203,8 +270,13 @@ def main():
     out_dir = args.output_dir or os.path.dirname(os.path.abspath(__file__))
     os.makedirs(out_dir, exist_ok=True)
 
-    X = synthetic_mixture(n=args.n, seed=args.seed)
-    print('synthetic 2D GMM data set: {} points, k={}'.format(X.shape[0], args.k))
+    if args.dataset == 'synthetic':
+        X = synthetic_mixture(n=args.n, seed=args.seed)
+        print('synthetic 2D GMM data set: {} points, k={}'.format(X.shape[0], args.k))
+    else:
+        X = load_image_pca_2d(args.dataset, n=args.n, data_root=args.data_root, seed=args.seed)
+        print('{} -> PCA(2D), extension not in the paper: {} points, k={}'.format(
+            args.dataset, X.shape[0], args.k))
 
     sizes = [int(s) for s in args.sizes.split(',')]
     contour_sizes = [int(s) for s in args.contour_sizes.split(',')]
@@ -212,12 +284,12 @@ def main():
     print('\n=== Figure 5: relative NLL error vs subset size ===')
     rows = run_figure5(X, args.k, sizes, args.trials, args.em_iters, args.em_restarts,
                        args.cg_iters, args.damping, args.start_size, args.seed, out_dir)
-    plot_figure5(rows, os.path.join(out_dir, 'gmm_relative_nll_error.png'))
+    plot_figure5(rows, os.path.join(out_dir, 'gmm_relative_nll_error.png'), k=args.k, dataset=args.dataset)
 
     print('\n=== Figure 4: contour plots ===')
     plot_figure4(X, args.k, contour_sizes, args.em_iters, args.em_restarts,
                 args.cg_iters, args.damping, args.start_size, args.seed,
-                os.path.join(out_dir, 'gmm_contours.png'))
+                os.path.join(out_dir, 'gmm_contours.png'), dataset=args.dataset)
 
     import csv
     csv_path = os.path.join(out_dir, 'gmm_relative_nll_error.csv')

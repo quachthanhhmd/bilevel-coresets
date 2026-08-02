@@ -41,6 +41,16 @@ keep the two on separate figures rather than combined into one, since they
 answer separate "does the paper's Sec. 5.2.2 setup transfer to dataset X"
 questions rather than a single comparison.
 
+Pass ``--dataset kmnist`` for real KMNIST (Kuzushiji-MNIST), same treatment
+as ``fashion``/``cifar10``: two classes flattened to 784-d pixel vectors,
+same torchvision/internet requirement, also kept off ``--dataset all`` and
+run as its own separate invocation/figure. Unlike ``fashion``'s
+Pullover-vs-Shirt or ``cifar10``'s Cat-vs-Dog, there is no well-known
+"hardest confused pair" reference for KMNIST readily available offline, so
+the default classes (0, 1) are an arbitrary (not empirically-chosen)
+placeholder -- pass ``--kmnist-classes`` to pick a different pair if you
+have a specific comparison in mind.
+
 Run with::
 
     python demos/demo_logistic_regression.py
@@ -49,6 +59,8 @@ Run with::
         --output demos/logistic_regression_coreset_accuracy_fashion.png
     python demos/demo_logistic_regression.py --dataset cifar10 --sizes 10,30,60,100 \\
         --output demos/logistic_regression_coreset_accuracy_cifar10.png
+    python demos/demo_logistic_regression.py --dataset kmnist --sizes 10,30,60,100 \\
+        --output demos/logistic_regression_coreset_accuracy_kmnist.png
 """
 
 import argparse
@@ -181,8 +193,48 @@ def load_cifar10_dataset(classes=(3, 5), max_samples=4000, data_root='data', see
     return name, torch.from_numpy(X).float(), torch.from_numpy(y).long()
 
 
+def load_kmnist_dataset(classes=(0, 1), max_samples=4000, data_root='data', seed=0):
+    """Real KMNIST (Kuzushiji-MNIST) restricted to two classes, flattened to
+    784-d pixels. Same shape/format as FashionMNIST, so this mirrors
+    :func:`load_fashion_dataset` exactly. Needs torchvision + internet (e.g.
+    on Kaggle); not available in this sandbox. Default classes are an
+    arbitrary placeholder pair -- see module docstring."""
+    import torchvision.datasets as tv_datasets
+    import torchvision.transforms as transforms
+    from sklearn.preprocessing import StandardScaler
+
+    transform = transforms.Compose([transforms.ToTensor()])
+    train = tv_datasets.KMNIST(root=data_root, train=True, download=True, transform=transform)
+    test = tv_datasets.KMNIST(root=data_root, train=False, download=True, transform=transform)
+
+    imgs, labels = [], []
+    for ds in (train, test):
+        targets = np.asarray(ds.targets)
+        mask = np.isin(targets, classes)
+        idx = np.nonzero(mask)[0]
+        for i in idx:
+            img, label = ds[i]
+            imgs.append(img.view(-1).numpy())
+            labels.append(label)
+    X = np.stack(imgs).astype(np.float32)
+    y = (np.asarray(labels) == classes[1]).astype(np.int64)
+
+    if max_samples is not None and X.shape[0] > max_samples:
+        rs = np.random.RandomState(seed)
+        keep = rs.choice(X.shape[0], max_samples, replace=False)
+        X, y = X[keep], y[keep]
+
+    X = StandardScaler().fit_transform(X)
+    class_names = {0: 'o', 1: 'ki', 2: 'su', 3: 'tsu', 4: 'na', 5: 'ha', 6: 'ma', 7: 'ya', 8: 're', 9: 'wo'}
+    a = class_names.get(classes[0], str(classes[0]))
+    b = class_names.get(classes[1], str(classes[1]))
+    name = 'kmnist {}-vs-{}'.format(a, b, X.shape[0])
+    return name, torch.from_numpy(X).float(), torch.from_numpy(y).long()
+
+
 def load_datasets(which='sklearn', fashion_classes=(2, 6), fashion_max_samples=4000,
-                  cifar10_classes=(3, 5), cifar10_max_samples=4000):
+                  cifar10_classes=(3, 5), cifar10_max_samples=4000,
+                  kmnist_classes=(0, 1), kmnist_max_samples=4000):
     datasets = {}
     if which in ('sklearn', 'all'):
         datasets.update(load_sklearn_datasets())
@@ -193,6 +245,10 @@ def load_datasets(which='sklearn', fashion_classes=(2, 6), fashion_max_samples=4
         # deliberately NOT included in 'all' -- kept on its own figure, see
         # module docstring (don't combine with fashion/sklearn on one chart)
         name, X, y = load_cifar10_dataset(classes=cifar10_classes, max_samples=cifar10_max_samples)
+        datasets[name] = (X, y)
+    if which == 'kmnist':
+        # also deliberately NOT included in 'all', same reasoning as cifar10
+        name, X, y = load_kmnist_dataset(classes=kmnist_classes, max_samples=kmnist_max_samples)
         datasets[name] = (X, y)
     return datasets
 
@@ -316,13 +372,15 @@ def parse_args():
     parser.add_argument('--batch-size', type=int, default=None,
                         help='forward-selection batch size b (default: adaptive, ~m/10; '
                              'use 1 for a faithful one-by-one reproduction of Figure 6)')
-    parser.add_argument('--dataset', choices=['sklearn', 'fashion', 'cifar10', 'all'], default='sklearn',
+    parser.add_argument('--dataset', choices=['sklearn', 'fashion', 'cifar10', 'kmnist', 'all'], default='sklearn',
                         help='"sklearn" (default, offline, breast_cancer+digits), '
                              '"fashion" (real FashionMNIST, needs torchvision+internet), '
                              '"cifar10" (real CIFAR-10, needs torchvision+internet -- run as a '
                              'separate invocation from "fashion", not combined; see module docstring), '
-                             '"all" (sklearn + fashion only, on one combined figure -- cifar10 is '
-                             'never included in "all")')
+                             '"kmnist" (real KMNIST, needs torchvision+internet -- also its own '
+                             'separate invocation, not combined; see module docstring), '
+                             '"all" (sklearn + fashion only, on one combined figure -- cifar10/kmnist '
+                             'are never included in "all")')
     parser.add_argument('--fashion-classes', default='2,6',
                         help='the two FashionMNIST class indices to use (default: 2,6 = Pullover vs Shirt)')
     parser.add_argument('--fashion-max-samples', type=int, default=4000,
@@ -331,6 +389,11 @@ def parse_args():
                         help='the two CIFAR-10 class indices to use (default: 3,5 = Cat vs Dog)')
     parser.add_argument('--cifar10-max-samples', type=int, default=4000,
                         help='cap on the number of CIFAR-10 points used (subsampled if larger)')
+    parser.add_argument('--kmnist-classes', default='0,1',
+                        help='the two KMNIST class indices to use (default: 0,1 -- arbitrary placeholder, '
+                             'see module docstring)')
+    parser.add_argument('--kmnist-max-samples', type=int, default=4000,
+                        help='cap on the number of KMNIST points used (subsampled if larger)')
     return parser.parse_args()
 
 
@@ -339,6 +402,7 @@ def main():
     sizes = [int(s) for s in args.sizes.split(',')]
     fashion_classes = tuple(int(c) for c in args.fashion_classes.split(','))
     cifar10_classes = tuple(int(c) for c in args.cifar10_classes.split(','))
+    kmnist_classes = tuple(int(c) for c in args.kmnist_classes.split(','))
 
     import os
     default_name = 'logistic_regression_coreset_accuracy_{}.png'.format(args.dataset)
@@ -348,7 +412,9 @@ def main():
     datasets = load_datasets(which=args.dataset, fashion_classes=fashion_classes,
                              fashion_max_samples=args.fashion_max_samples,
                              cifar10_classes=cifar10_classes,
-                             cifar10_max_samples=args.cifar10_max_samples)
+                             cifar10_max_samples=args.cifar10_max_samples,
+                             kmnist_classes=kmnist_classes,
+                             kmnist_max_samples=args.kmnist_max_samples)
     all_results = {}
     for name, (X, y) in datasets.items():
         accs, full_acc = run_dataset(name, X, y, sizes, args.seeds, args)
